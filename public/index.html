@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PREHRAJTO DOWNLOADER</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="style.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <i class="fas fa-download"></i>
+                PREHRAJTO
+            </div>
+            <div class="nav-menu">
+                <a href="#" class="nav-link active" data-mode="movie">FILMY</a>
+                <a href="#" class="nav-link" data-mode="series">SERIÁLY</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-container">
+            <div class="hero-content">
+                <h1 class="hero-title">
+                    JELLYFIN<br>
+                    <span class="hero-title-accent">DOWNLOADER</span>
+                </h1>
+                <p class="hero-subtitle">
+                    Automatické stahování filmů a seriálů<br>
+                    s perfektním pojmenováním pro Jellyfin
+                </p>
+            </div>
+            <div class="hero-visual">
+                <div class="hero-circle">
+                    <i class="fas fa-film"></i>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Mode Selection -->
+    <section class="mode-selection">
+        <div class="container">
+            <div class="mode-grid">
+                <div class="mode-card active" data-mode="movie">
+                    <div class="mode-icon">
+                        <i class="fas fa-film"></i>
+                    </div>
+                    <h3>STÁHNOUT FILM</h3>
+                    <p>Jeden film s perfektním pojmenováním a IMDB ID</p>
+                </div>
+                <div class="mode-card" data-mode="series">
+                    <div class="mode-icon">
+                        <i class="fas fa-tv"></i>
+                    </div>
+                    <h3>STÁHNOUT SERIÁL</h3>
+                    <p>Celé série s automatickým pojmenováním dílů</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Movie Mode -->
+    <section class="download-section" id="movie-mode">
+        <div class="container">
+            <!-- Language Selection -->
+            <div class="step-section">
+                <h2 class="step-title">VÝBĚR JAZYKA</h2>
+                <div class="language-grid">
+                    <div class="language-card active" data-lang="cz">
+                        <i class="fas fa-flag"></i>
+                        <span>ČEŠTINA</span>
+                    </div>
+                    <div class="language-card" data-lang="en">
+                        <i class="fas fa-globe"></i>
+                        <span>ANGLIČTINA + TITULKY</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Search Section -->
+            <div class="step-section">
+                <h2 class="step-title">VYHLEDÁNÍ FILMU</h2>
+                <div class="search-container">
+                    <div class="search-input-group">
+                        <input type="text" id="movie-search" class="search-input" placeholder="Zadejte název filmu...">
+                        <button class="search-btn" id="movie-search-btn">
+                            <i class="fas fa-search"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div class="results-section" id="movie-results" style="display: none;">
+                <div class="results-header">
+                    <h3>NALEZENÉ FILMY</h3>
+                    <div class="sort-controls">
+                        <select id="movie-sort" class="sort-select">
+                            <option value="smart">INTELIGENTNÍ</option>
+                            <option value="largest">OD NEJVĚTŠÍCH</option>
+                            <option value="smallest">OD NEJMENŠÍCH</option>
+                            <option value="middle">STŘEDNÍ PRVNÍ</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="results-grid" id="movie-results-grid">
+                    <!-- Results will be populated here -->
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Series Mode -->
+    <section class="download-section" id="series-mode" style="display: none;">
+        <div class="container">
+            <!-- Language Selection -->
+            <div class="step-section">
+                <h2 class="step-title">VÝBĚR JAZYKA</h2>
+                <div class="language-grid">
+                    <div class="language-card active" data-lang="cz">
+                        <i class="fas fa-flag"></i>
+                        <span>ČEŠTINA</span>
+                    </div>
+                    <div class="language-card" data-lang="en">
+                        <i class="fas fa-globe"></i>
+                        <span>ANGLIČTINA + TITULKY</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Series Search -->
+            <div class="step-section">
+                <h2 class="step-title">VYHLEDÁNÍ SERIÁLU</h2>
+                <div class="search-container">
+                    <div class="search-input-group">
+                        <input type="text" id="series-search" class="search-input" placeholder="Zadejte název seriálu...">
+                        <button class="search-btn" id="series-search-btn">
+                            <i class="fas fa-search"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Series Results -->
+            <div class="results-section" id="series-results" style="display: none;">
+                <h2 class="step-title">VÝSLEDKY VYHLEDÁVÁNÍ</h2>
+                <div class="sort-container">
+                    <select class="sort-select" id="series-sort">
+                        <option value="smart">Chytré řazení</option>
+                        <option value="largest">Od největších</option>
+                        <option value="smallest">Od nejmenších</option>
+                        <option value="middle">Střední velikost</option>
+                    </select>
+                </div>
+                <div class="results-grid" id="series-results-grid">
+                    <!-- Search results will be populated here -->
+                </div>
+            </div>
+
+            <!-- Series Selection -->
+            <div class="step-section" id="series-selection" style="display: none;">
+                <h2 class="step-title">VÝBĚR SERIÁLU</h2>
+                <div class="series-info" id="series-info">
+                    <!-- Series info will be populated here -->
+                </div>
+                <div class="seasons-grid" id="seasons-grid">
+                    <!-- Seasons will be populated here -->
+                </div>
+            </div>
+
+            <!-- Episodes Selection -->
+            <div class="step-section" id="episodes-selection" style="display: none;">
+                <h2 class="step-title">VÝBĚR DÍLŮ</h2>
+                <div class="episodes-container" id="episodes-container">
+                    <!-- Episodes will be populated here -->
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download Progress -->
+    <section class="download-progress" id="download-progress" style="display: none;">
+        <div class="container">
+            <h2 class="step-title">STAHOVÁNÍ</h2>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-text" id="progress-text">Připravuji stahování...</div>
+            </div>
+            <div class="download-queue" id="download-queue">
+                <!-- Download queue will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

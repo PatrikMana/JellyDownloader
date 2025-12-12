@@ -1,0 +1,287 @@
+/* Custom styles pre Prehrajto Downloader */
+
+:root {
+    --primary-color: #0d6efd;
+    --secondary-color: #6c757d;
+    --success-color: #198754;
+    --dark-color: #212529;
+    --light-color: #f8f9fa;
+}
+
+body {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.container-fluid {
+    background: rgba(255, 255, 255, 0.95);
+    min-height: 100vh;
+    backdrop-filter: blur(10px);
+}
+
+/* Header styling */
+header {
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 10px;
+    margin: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* Card styling */
+.card {
+    border: none;
+    border-radius: 15px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+/* Movie card specific */
+.movie-card {
+    overflow: hidden;
+    height: 100%;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.movie-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+.movie-card .card-img-top {
+    height: 200px;
+    object-fit: cover;
+    transition: transform 0.3s ease;
+}
+
+.movie-card:hover .card-img-top {
+    transform: scale(1.02);
+}
+
+.movie-info {
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-size: 0.8rem;
+    margin: 5px;
+    display: inline-block;
+}
+
+/* Search input */
+.input-group-lg .form-control {
+    border-radius: 10px 0 0 10px;
+    border: 2px solid #e9ecef;
+    transition: border-color 0.3s ease;
+}
+
+.input-group-lg .form-control:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+}
+
+.input-group-lg .btn {
+    border-radius: 0 10px 10px 0;
+    border: 2px solid var(--primary-color);
+}
+
+/* Loading animation */
+.spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+/* Video player styling */
+video {
+    max-width: 100%;
+    height: auto;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+/* Modal customization */
+.modal-content {
+    border-radius: 15px;
+    border: none;
+}
+
+.modal-header {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 15px 15px 0 0;
+}
+
+.modal-footer {
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 0 0 15px 15px;
+}
+
+.modal-body {
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* Video wrapper */
+.video-wrapper {
+    position: relative;
+    background: #000;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 20px 0;
+}
+
+.video-wrapper video {
+    display: block;
+    margin: 0 auto;
+}
+
+/* Modal backdrop fix */
+.modal-backdrop {
+    z-index: 1040;
+}
+
+.modal {
+    z-index: 1050;
+}
+
+.modal.show {
+    display: block !important;
+}
+
+/* Fix pre modal-open class */
+body.modal-open {
+    overflow: hidden;
+    padding-right: 0 !important;
+}
+
+/* Movie card klik prevencia */
+.movie-card {
+    cursor: default !important;
+}
+
+.movie-card .btn {
+    cursor: pointer;
+    z-index: 10;
+    position: relative;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .container-fluid {
+        margin: 0;
+        border-radius: 0;
+    }
+    
+    header {
+        margin: 10px;
+        border-radius: 0 0 15px 15px;
+    }
+    
+    .movie-card .card-img-top {
+        height: 150px;
+    }
+}
+
+/* Animation classes */
+.fade-in {
+    animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* No results styling */
+.no-results {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--secondary-color);
+}
+
+.no-results i {
+    font-size: 4rem;
+    margin-bottom: 20px;
+    opacity: 0.5;
+}
+
+/* Error styling */
+.error-message {
+    background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+    color: white;
+    border-radius: 10px;
+    padding: 20px;
+    margin: 20px 0;
+    text-align: center;
+}
+
+.error-message i {
+    font-size: 2rem;
+    margin-bottom: 10px;
+}
+
+/* Filter styling */
+.movie-meta {
+    min-height: 30px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 8px;
+    margin-bottom: 4px;
+}
+
+.movie-meta .badge {
+    font-size: 0.7rem;
+    margin-bottom: 2px;
+    margin-right: 4px;
+}
+
+/* Advanced filters */
+#advancedFilters.collapse:not(.show) {
+    display: none;
+}
+
+#advancedFilters.collapse.show {
+    display: block;
+}
+
+/* Filter labels */
+.form-label.small {
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 4px;
+    font-size: 0.875rem;
+}
+
+/* Quality indicators */
+.badge.bg-danger { background-color: #dc3545 !important; }
+.badge.bg-primary { background-color: #0d6efd !important; }
+.badge.bg-info { background-color: #0dcaf0 !important; }
+.badge.bg-secondary { background-color: #6c757d !important; }
+.badge.bg-dark { background-color: #212529 !important; }
+.badge.bg-success { background-color: #198754 !important; }
+.badge.bg-warning { background-color: #ffc107 !important; color: #000; }
+
+/* Filter section styling */
+.card .row.g-3 {
+    margin-bottom: 0;
+}
+
+.card .row.g-3 .col-md-4 {
+    margin-bottom: 8px;
+}
+
+/* Advanced toggle button */
+.btn-link {
+    text-decoration: none;
+    font-size: 0.875rem;
+}
+
+.btn-link:hover {
+    text-decoration: underline;
+}
