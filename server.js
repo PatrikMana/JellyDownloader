@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -15,6 +18,7 @@ const PORT = process.env.PORT || 3000;
 // IMDB API Configuration
 const OMDB_API_KEY = process.env.OMDB_API_KEY || 'your-api-key-here'; // Get from http://www.omdbapi.com/apikey.aspx
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
+const JELLYFIN_DIR = process.env.JELLYFIN_DIR || null; // Set to your Jellyfin media path, e.g., '/path/to/jellyfin/movies'
 
 // Ensure downloads directory exists
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -456,20 +460,56 @@ app.get('/api/subtitles/:title/:year?', async (req, res) => {
 });
 
 // Helper function to generate Jellyfin-compatible filename
-function generateJellyfinFilename(title, imdbData, type = 'movie') {
+function generateJellyfinFilename(title, imdbData, type = 'movie', season = null, episode = null) {
     // Clean title (remove invalid filename characters)
     const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
         // Movies: Movie Title (Year) [imdbid-ttXXXXXXX]
+        // Jellyfin format: /movies/Movie Title (Year)/Movie Title (Year).ext
         const year = imdbData?.Year || 'Unknown';
-        const imdbId = imdbData?.imdbID || 'unknown';
-        return `${cleanTitle} (${year}) [imdbid-${imdbId}]`;
-    } else {
-        // Series: Series Name [imdbid-ttXXXXXXX]
-        const imdbId = imdbData?.imdbID || 'unknown';
-        return `${cleanTitle} [imdbid-${imdbId}]`;
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        return `${cleanTitle} (${year})${suffix}`;
+    } else if (type === 'series') {
+        // Series: Series Name [imdbid-ttXXXXXXX]/Season XX/SeriesName - sXXeYY - Episode Title.ext
+        // Jellyfin format: /tvshows/Series Name (Year)/Season 01/Series Name - s01e01 - Episode Title.ext
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        
+        if (season !== null && episode !== null) {
+            const s = String(season).padStart(2, '0');
+            const e = String(episode).padStart(2, '0');
+            return `${cleanTitle}${suffix} - s${s}e${e}`;
+        }
+        return `${cleanTitle}${suffix}`;
     }
+    return cleanTitle;
+}
+
+// Helper function to get Jellyfin directory structure
+function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
+    const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    
+    if (type === 'movie') {
+        const year = imdbData?.Year || 'Unknown';
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        const movieDir = `${cleanTitle} (${year})${suffix}`;
+        return path.join(baseDir, 'movies', movieDir);
+    } else if (type === 'series') {
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        const seriesDir = `${cleanTitle}${suffix}`;
+        
+        if (season !== null) {
+            const seasonDir = `Season ${String(season).padStart(2, '0')}`;
+            return path.join(baseDir, 'tvshows', seriesDir, seasonDir);
+        }
+        return path.join(baseDir, 'tvshows', seriesDir);
+    }
+    return baseDir;
 }
 
 // Download endpoint
@@ -485,16 +525,24 @@ app.post('/api/download', async (req, res) => {
         }
         
         console.log('📥 Starting download for:', title);
+        console.log('📁 Type:', type, '| IMDB:', imdbData?.imdbID);
         
-        // Generate Jellyfin-compatible filename
-        const baseFilename = generateJellyfinFilename(title, imdbData, type);
-        const videoFilename = `${baseFilename}.mp4`;
-        const videoPath = path.join(DOWNLOADS_DIR, videoFilename);
+        // Get video file extension from URL
+        const urlExt = videoUrl.match(/\.(mp4|mkv|avi|webm)(?:[?#]|$)/i);
+        const videoExt = urlExt ? urlExt[1] : 'mp4';
+        
+        // Generate Jellyfin-compatible paths
+        const season = req.body.season || null;
+        const episode = req.body.episode || null;
+        const downloadDir = getJellyfinPath(title, imdbData, type, season);
+        const baseFilename = generateJellyfinFilename(title, imdbData, type, season, episode);
+        const videoFilename = `${baseFilename}.${videoExt}`;
+        const videoPath = path.join(downloadDir, videoFilename);
         
         // Create download directory if it doesn't exist
-        const downloadDir = path.dirname(videoPath);
         if (!fs.existsSync(downloadDir)) {
             fs.mkdirSync(downloadDir, { recursive: true });
+            console.log('📁 Created directory:', downloadDir);
         }
         
         // Start video download
@@ -505,10 +553,13 @@ app.post('/api/download', async (req, res) => {
             method: 'GET',
             url: videoUrl,
             responseType: 'stream',
-            timeout: 30000,
+            timeout: 0, // No timeout - let it download
+            maxRedirects: 5,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://prehrajto.cz/'
+                'Referer': 'https://prehrajto.cz/',
+                'Accept': '*/*',
+                'Connection': 'keep-alive'
             }
         });
         
@@ -537,7 +588,7 @@ app.post('/api/download', async (req, res) => {
         for (const subtitle of subtitles) {
             try {
                 const subtitleFilename = `${baseFilename}.${subtitle.language}.srt`;
-                const subtitlePath = path.join(DOWNLOADS_DIR, subtitleFilename);
+                const subtitlePath = path.join(downloadDir, subtitleFilename);
                 
                 console.log('📝 Downloading subtitle:', subtitleFilename);
                 
@@ -563,22 +614,32 @@ app.post('/api/download', async (req, res) => {
         
         // Create metadata file for Jellyfin
         const metadataFilename = `${baseFilename}.nfo`;
-        const metadataPath = path.join(DOWNLOADS_DIR, metadataFilename);
+        const metadataPath = path.join(downloadDir, metadataFilename);
         
-        const metadata = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        const metadata = type === 'movie' ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <movie>
-    <title>${title}</title>
-    <originaltitle>${imdbData?.Title || title}</originaltitle>
+    <title>${escapeXml(title)}</title>
+    <originaltitle>${escapeXml(imdbData?.Title || title)}</originaltitle>
     <year>${imdbData?.Year || ''}</year>
-    <plot>${imdbData?.Plot || ''}</plot>
+    <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
     <runtime>${imdbData?.Runtime || ''}</runtime>
     <genre>${imdbData?.Genre || ''}</genre>
     <director>${imdbData?.Director || ''}</director>
     <actor>${imdbData?.Actors || ''}</actor>
-    <imdb>${imdbData?.imdbID || ''}</imdb>
+    <id>${imdbData?.imdbID || ''}</id>
+    <imdbid>${imdbData?.imdbID || ''}</imdbid>
     <rating>${imdbData?.imdbRating || ''}</rating>
     <poster>${imdbData?.Poster || ''}</poster>
-</movie>`;
+</movie>` : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<tvshow>
+    <title>${escapeXml(title)}</title>
+    <year>${imdbData?.Year || ''}</year>
+    <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
+    <genre>${imdbData?.Genre || ''}</genre>
+    <id>${imdbData?.imdbID || ''}</id>
+    <imdbid>${imdbData?.imdbID || ''}</imdbid>
+    <rating>${imdbData?.imdbRating || ''}</rating>
+</tvshow>`;
         
         fs.writeFileSync(metadataPath, metadata, 'utf8');
         console.log('✅ Metadata file created:', metadataFilename);
@@ -591,14 +652,43 @@ app.post('/api/download', async (req, res) => {
                 subtitles: subtitleFiles,
                 metadata: metadataFilename
             },
-            path: DOWNLOADS_DIR
+            path: downloadDir,
+            jellyfinReady: JELLYFIN_DIR !== null,
+            instructions: JELLYFIN_DIR 
+                ? 'Soubory jsou připravené pro Jellyfin. Spusťte Library Scan v Jellyfin.'
+                : `Soubory jsou v: ${downloadDir}. Přesuněte je do Jellyfin knihovny a spusťte Library Scan.`
         });
         
     } catch (error) {
         console.error('❌ Download error:', error.message);
+        console.error('Error details:', error.code, error.response?.status);
+        
+        // Clean up partial download
+        if (videoPath && fs.existsSync(videoPath)) {
+            try {
+                fs.unlinkSync(videoPath);
+                console.log('🗑️ Cleaned up partial download');
+            } catch (cleanupError) {
+                console.error('Failed to clean up:', cleanupError.message);
+            }
+        }
+        
+        let errorMessage = error.message;
+        if (error.code === 'ECONNABORTED') {
+            errorMessage = 'Stahování bylo přerušeno - zkuste to znovu';
+        } else if (error.code === 'ETIMEDOUT') {
+            errorMessage = 'Timeout - video server neodpovídá';
+        } else if (error.response?.status === 404) {
+            errorMessage = 'Video soubor nebyl nalezen (404)';
+        } else if (error.response?.status === 403) {
+            errorMessage = 'Přístup zamítnut (403) - možná je potřeba jiný referer';
+        }
+        
         res.status(500).json({
             success: false,
-            error: `Chyba při stahování: ${error.message}`
+            error: `Chyba při stahování: ${errorMessage}`,
+            code: error.code,
+            details: error.message
         });
     }
 });
@@ -662,6 +752,16 @@ app.delete('/api/downloads/:filename', (req, res) => {
 });
 
 // Pomocné funkce (stejné jako v Ruby)
+function escapeXml(unsafe) {
+    if (!unsafe) return '';
+    return unsafe.toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
 function durationToSeconds(durationStr) {
   if (!durationStr || durationStr === '') return 0;
   

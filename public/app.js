@@ -746,8 +746,8 @@ function displayResults(results) {
         return;
     }
     
-    container.innerHTML = results.map(movie => `
-        <div class="result-card" data-movie='${JSON.stringify(movie).replace(/'/g, "&#39;")}'>
+    container.innerHTML = results.map((movie, index) => `
+        <div class="result-card" data-href="${escapeHtml(movie.href)}" data-title="${escapeHtml(movie.title)}" data-index="${index}">
             <div class="result-image">
                 ${movie.imageSrc ? 
                     `<img src="${movie.imageSrc}" alt="${escapeHtml(movie.title)}" onerror="this.style.display='none'">` :
@@ -763,11 +763,11 @@ function displayResults(results) {
                     ${movie.duration ? `<span class="result-badge">${movie.duration}</span>` : ''}
                 </div>
                 <div class="result-actions">
-                    <button class="btn" onclick="previewVideo('${movie.href}', '${escapeHtml(movie.title)}')">
+                    <button class="btn btn-preview" data-action="preview">
                         <i class="fas fa-play"></i>
                         ZKONTROLOVAT
                     </button>
-                    <button class="btn btn-primary" onclick="selectForDownload('${movie.href}', '${escapeHtml(movie.title)}')">
+                    <button class="btn btn-primary btn-download" data-action="download">
                         <i class="fas fa-download"></i>
                         VYBRAT
                     </button>
@@ -775,6 +775,23 @@ function displayResults(results) {
             </div>
         </div>
     `).join('');
+    
+    // Add event listeners to all buttons
+    container.querySelectorAll('.result-card').forEach((card) => {
+        const href = card.dataset.href;
+        const title = card.dataset.title;
+        
+        const previewBtn = card.querySelector('.btn-preview');
+        const downloadBtn = card.querySelector('.btn-download');
+        
+        if (previewBtn) {
+            previewBtn.addEventListener('click', () => previewVideo(href, title));
+        }
+        
+        if (downloadBtn) {
+            downloadBtn.addEventListener('click', () => selectForDownload(href, title));
+        }
+    });
     
     section.style.display = 'block';
 }
@@ -908,13 +925,37 @@ async function startDownload(item) {
     try {
         console.log('📥 Starting server-side download:', item);
         
+        // Get IMDB data if not already present
+        let imdbData = item.imdbInfo;
+        if (!imdbData && item.title) {
+            try {
+                const titleMatch = item.title.match(/(.+?)\s*\((\d{4})\)/);
+                const searchTitle = titleMatch ? titleMatch[1] : item.title;
+                const year = titleMatch ? titleMatch[2] : null;
+                
+                const imdbResponse = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(searchTitle)}${year ? `/${year}` : ''}`);
+                const imdbResult = await imdbResponse.json();
+                
+                if (imdbResult.success) {
+                    imdbData = imdbResult.data;
+                    console.log('✅ IMDB data retrieved:', imdbData.Title);
+                }
+            } catch (imdbError) {
+                console.warn('⚠️ Could not fetch IMDB data:', imdbError.message);
+            }
+        }
+        
         const downloadData = {
             videoUrl: item.url,
             title: item.title,
-            imdbData: item.imdbInfo,
+            imdbData: imdbData,
             type: currentMode,
-            subtitles: item.subtitles || []
+            subtitles: item.subtitles || [],
+            season: item.season || null,
+            episode: item.episode || null
         };
+        
+        showToast('Zahajuji stahování...', 'info');
         
         const response = await fetch(`${API_CONFIG.prehrajto}/download`, {
             method: 'POST',
@@ -932,20 +973,29 @@ async function startDownload(item) {
         
         if (result.success) {
             console.log('✅ Download completed:', result.files);
-            showToast(`Stahování dokončeno: ${result.files.video}`, 'success');
             
-            // Show download progress (completed immediately for now)
-            showDownloadProgress({
+            // Show detailed success message
+            const jellyfinMsg = result.jellyfinReady 
+                ? '✅ Soubory jsou připraveny pro Jellyfin!' 
+                : '⚠️ Přesuňte soubory do Jellyfin knihovny';
+            
+            showToast(`${jellyfinMsg}\n${result.files.video}`, 'success', 5000);
+            
+            // Show download info
+            showDownloadComplete({
                 ...item,
                 completed: true,
-                files: result.files
+                files: result.files,
+                path: result.path,
+                jellyfinReady: result.jellyfinReady,
+                instructions: result.instructions
             });
         } else {
             throw new Error(result.error || 'Download se nezdařil');
         }
     } catch (error) {
         console.error('❌ Download error:', error);
-        showToast(`Chyba při stahování: ${error.message}`, 'error');
+        showToast(`Chyba při stahování: ${error.message}`, 'error', 5000);
     }
 }
 
@@ -994,6 +1044,54 @@ function showDownloadProgress(item) {
         progressFill.style.width = `${progress}%`;
         progressText.textContent = `Stahování... ${Math.round(progress)}%`;
     }, 500);
+}
+
+/**
+ * Show download complete message
+ */
+function showDownloadComplete(item) {
+    const section = document.getElementById('download-progress');
+    const queueContainer = document.getElementById('download-queue');
+    
+    section.style.display = 'block';
+    
+    // Add completed item
+    const completeItem = document.createElement('div');
+    completeItem.className = 'queue-item';
+    completeItem.innerHTML = `
+        <div style="padding: 1.5rem; background: var(--color-bg-tertiary); border: 2px solid var(--color-glitch-green); margin-bottom: 1rem; border-radius: 8px;">
+            <div style="margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h4 style="color: var(--color-glitch-green); margin-bottom: 0.5rem;">
+                            <i class="fas fa-check-circle"></i> ${escapeHtml(item.title)}
+                        </h4>
+                        <p style="color: var(--color-text-secondary); font-size: 0.9rem; margin: 0;">
+                            ${item.files ? item.files.video : 'Staženo'}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div style="padding: 1rem; background: rgba(0,255,159,0.05); border-left: 3px solid var(--color-glitch-green); margin-top: 1rem;">
+                <p style="margin: 0; font-size: 0.9rem;">
+                    <strong>${item.jellyfinReady ? '✅ PŘIPRAVENO PRO JELLYFIN' : '⚠️ VYŽADUJE RUČNÍ PŘESUN'}</strong><br>
+                    ${escapeHtml(item.instructions || '')}
+                </p>
+                ${item.path ? `<p style="margin: 0.5rem 0 0 0; font-size: 0.85rem; color: var(--color-text-secondary);">
+                    📁 ${escapeHtml(item.path)}
+                </p>` : ''}
+            </div>
+            ${item.files && item.files.subtitles && item.files.subtitles.length > 0 ? `
+                <div style="margin-top: 0.5rem; padding: 0.5rem; background: rgba(255,255,255,0.03);">
+                    <small style="color: var(--color-text-secondary);">
+                        📝 Titulky: ${item.files.subtitles.join(', ')}
+                    </small>
+                </div>
+            ` : ''}
+        </div>
+    `;
+    
+    queueContainer.appendChild(completeItem);
 }
 
 // ===============================================

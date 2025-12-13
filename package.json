@@ -8,16 +8,22 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
     "path": "^0.12.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
-  "keywords": ["prehrajto", "downloader", "scraper", "video"],
+  "keywords": [
+    "prehrajto",
+    "downloader",
+    "scraper",
+    "video"
+  ],
   "author": "Patrik",
   "license": "MIT"
 }
