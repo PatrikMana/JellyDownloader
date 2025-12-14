@@ -1073,7 +1073,7 @@ async function startDownload(item) {
         const downloadData = {
             videoUrl: item.url,
             title: item.title,
-            imdbData: item.imdbInfo || null,
+            imdbData: imdbData || null,  // ✅ použij to co ses opravdu dotáhl
             type: currentMode,
             subtitles: item.subtitles || [],
             season: item.season || null,

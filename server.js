@@ -260,7 +260,16 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
 // IMDB API endpoint
 app.get('/api/imdb/:title/:year?', async (req, res) => {
     try {
-        const { title, year } = req.params;
+        let { title, year } = req.params;
+        const originalTitle = title;
+        
+        // Očisti title pro lepší matching
+        title = cleanTitleForSearch(title);
+        
+        // Pokus se extrahovat rok, pokud není zadán
+        if (!year) {
+            year = extractYear(originalTitle);
+        }
         
         if (OMDB_API_KEY === 'your-api-key-here') {
             // Mock IMDB data for development
@@ -281,11 +290,11 @@ app.get('/api/imdb/:title/:year?', async (req, res) => {
             return res.json({ success: true, data: mockData });
         }
         
-        // Real OMDB API call
-        const searchUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&t=${encodeURIComponent(title)}${year ? `&y=${year}` : ''}`;
+        // 1. Zkus přesný match s t=
+        let searchUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&t=${encodeURIComponent(title)}${year ? `&y=${year}` : ''}`;
         
-        console.log('🔍 Searching IMDB for:', title, year ? `(${year})` : '');
-        const response = await axios.get(searchUrl, {
+        console.log('🔍 Searching IMDB (exact) for:', title, year ? `(${year})` : '');
+        let response = await axios.get(searchUrl, {
             timeout: 10000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -293,15 +302,50 @@ app.get('/api/imdb/:title/:year?', async (req, res) => {
         });
         
         if (response.data.Response === 'True') {
-            console.log('✅ IMDB data found:', response.data.Title);
-            res.json({ success: true, data: response.data });
-        } else {
-            console.log('❌ IMDB not found:', response.data.Error);
-            res.status(404).json({
-                success: false,
-                error: response.data.Error || 'Film nebyl v IMDB databázi nalezen'
-            });
+            console.log('✅ IMDB data found (exact):', response.data.Title);
+            return res.json({ success: true, data: response.data });
         }
+        
+        // 2. Fallback: hledej pomocí s= a vyber nejlepší shodu
+        console.log('⚠️ Exact match failed, trying search...');
+        searchUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&s=${encodeURIComponent(title)}&type=movie`;
+        
+        response = await axios.get(searchUrl, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        
+        if (response.data.Response === 'True' && response.data.Search && response.data.Search.length > 0) {
+            // Vyber nejlepší shodu (první výsledek nebo s matchujícím rokem)
+            let bestMatch = response.data.Search[0];
+            
+            if (year) {
+                const yearMatch = response.data.Search.find(m => m.Year === year);
+                if (yearMatch) bestMatch = yearMatch;
+            }
+            
+            // Dotahni detail
+            const detailUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${bestMatch.imdbID}`;
+            const detailResponse = await axios.get(detailUrl, {
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            });
+            
+            if (detailResponse.data.Response === 'True') {
+                console.log('✅ IMDB data found (search):', detailResponse.data.Title);
+                return res.json({ success: true, data: detailResponse.data });
+            }
+        }
+        
+        console.log('❌ IMDB not found:', response.data.Error);
+        res.status(404).json({
+            success: false,
+            error: response.data.Error || 'Film nebyl v IMDB databázi nalezen'
+        });
     } catch (error) {
         console.error('Chyba při IMDB vyhledávání:', error.message);
         res.status(500).json({
@@ -511,6 +555,34 @@ app.get('/api/subtitles/:title/:year?', async (req, res) => {
         });
     }
 });
+
+// Helper function to clean title for IMDB search
+function cleanTitleForSearch(raw) {
+    if (!raw) return '';
+    let s = raw;
+
+    // zahodě typické release tagy
+    s = s.replace(/\b(2160p|1080p|720p|480p|4k|uhd|fhd|hdr|dv)\b/ig, '');
+    s = s.replace(/\b(web[-_. ]?dl|webrip|brrip|bluray|dvdrip|hdtv|cam|ts)\b/ig, '');
+    s = s.replace(/\b(x264|x265|h\.?264|h\.?265|hevc|aac|ac3|dts)\b/ig, '');
+    s = s.replace(/\b(cz|cesky|česky|dabing|dubbing|titulky|subs|sk|slovak|dual)\b/ig, '');
+
+    // smaž závorky/hranataté věci co často nesou tagy
+    s = s.replace(/\[[^\]]*]/g, ' ');
+    s = s.replace(/\([^)]*(1080p|720p|web|bluray|dabing|cz|sk|titulky)[^)]*\)/ig, ' ');
+
+    // tečky/underscore -> mezery
+    s = s.replace(/[._]+/g, ' ');
+
+    // whitespace
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+}
+
+function extractYear(raw) {
+    const m = String(raw).match(/\b(19\d{2}|20\d{2})\b/);
+    return m ? m[1] : null;
+}
 
 function removeEmptyDirsUp(startDir, stopAtDir) {
   if (!startDir || !stopAtDir) return;
@@ -723,6 +795,7 @@ app.post('/api/download', async (req, res) => {
   <genre>${imdbData?.Genre || ''}</genre>
   <director>${imdbData?.Director || ''}</director>
   <actor>${imdbData?.Actors || ''}</actor>
+  <uniqueid type="imdb" default="true">${imdbData?.imdbID || ''}</uniqueid>
   <id>${imdbData?.imdbID || ''}</id>
   <imdbid>${imdbData?.imdbID || ''}</imdbid>
   <rating>${imdbData?.imdbRating || ''}</rating>
@@ -734,6 +807,7 @@ app.post('/api/download', async (req, res) => {
   <year>${imdbData?.Year || ''}</year>
   <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
   <genre>${imdbData?.Genre || ''}</genre>
+  <uniqueid type="imdb" default="true">${imdbData?.imdbID || ''}</uniqueid>
   <id>${imdbData?.imdbID || ''}</id>
   <imdbid>${imdbData?.imdbID || ''}</imdbid>
   <rating>${imdbData?.imdbRating || ''}</rating>
