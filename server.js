@@ -599,12 +599,16 @@ app.post('/api/download', async (req, res) => {
 
             if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
 
+            job.abortController = new AbortController();
+            job.createdFiles = [];
+
             const videoResponse = await axios({
                 method: 'GET',
                 url: videoUrl,
                 responseType: 'stream',
                 timeout: 0,
                 maxRedirects: 5,
+                signal: job.abortController.signal,   // <-- DŮLEŽITÉ
                 headers: {
                     'User-Agent': 'Mozilla/5.0',
                     'Referer': 'https://prehrajto.cz/',
@@ -612,6 +616,13 @@ app.post('/api/download', async (req, res) => {
                     'Connection': 'keep-alive'
                 }
             });
+            job.httpStream = videoResponse.data;
+
+            const writeStream = fs.createWriteStream(videoPath);
+            job.writeStream = writeStream;
+            job.videoPath = videoPath;
+            job.downloadDir = downloadDir;
+
 
             const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
 
@@ -619,8 +630,6 @@ app.post('/api/download', async (req, res) => {
             let lastTickBytes = 0;
             let lastTickTime = Date.now();
             const startTime = Date.now();
-
-            const writeStream = fs.createWriteStream(videoPath);
 
             videoResponse.data.on('data', (chunk) => {
                 downloadedBytes += chunk.length;
@@ -668,6 +677,7 @@ app.post('/api/download', async (req, res) => {
 
                     const subtitleWriteStream = fs.createWriteStream(subtitlePath);
                     await pipelineAsync(subtitleResponse.data, subtitleWriteStream);
+                    job.createdFiles.push(subtitlePath);
                     subtitleFiles.push(subtitleFilename);
                 } catch (e) {
                     // ignore failed subtitles
@@ -706,6 +716,7 @@ app.post('/api/download', async (req, res) => {
 </tvshow>`;
 
             fs.writeFileSync(metadataPath, metadata, 'utf8');
+            job.createdFiles.push(metadataPath);
 
             job.status = 'done';
 
@@ -725,6 +736,17 @@ app.post('/api/download', async (req, res) => {
             });
 
         } catch (error) {
+            // Pokud už někdo mezitím dal cancel, ber to jako "canceled", ne jako error
+            if (job.status === 'canceled') {
+                // (soubory už endpoint cancel zkusil mazat, ale pro jistotu můžeš znovu)
+                emitJob(job, {
+                    type: 'canceled',
+                    jobId: job.jobId,
+                    message: 'Stahování bylo zrušeno.'
+                });
+                return;
+            }
+
             job.status = 'error';
 
             // clean up partial file
@@ -740,6 +762,49 @@ app.post('/api/download', async (req, res) => {
         }
     })();
 });
+
+app.post('/api/download/cancel/:jobId', async (req, res) => {
+    const job = downloadJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ success: false, error: 'Job nenalezen' });
+
+    // pokud už je hotovo/failed, nemá co rušit
+    if (job.status === 'done') {
+        return res.status(409).json({ success: false, error: 'Download už je dokončen' });
+    }
+
+    job.status = 'canceled';
+
+    // 1) abort HTTP request (axios)
+    try { job.abortController?.abort(); } catch {}
+
+    // 2) znič streamy
+    try { job.httpStream?.destroy?.(); } catch {}
+    try { job.writeStream?.destroy?.(); } catch {}
+
+    // 3) smaž rozpracované soubory
+    const toDelete = [];
+
+    if (job.videoPath) toDelete.push(job.videoPath);
+
+    if (Array.isArray(job.createdFiles)) {
+        for (const fp of job.createdFiles) toDelete.push(fp);
+    }
+
+    for (const fp of toDelete) {
+        try {
+            if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
+        } catch {}
+    }
+
+    emitJob(job, {
+        type: 'canceled',
+        jobId: job.jobId,
+        message: 'Stahování zrušeno. Částečné soubory byly smazány.'
+    });
+
+    return res.json({ success: true });
+});
+
 // Get downloads list
 app.get('/api/downloads', (req, res) => {
     try {

@@ -159,6 +159,36 @@ function createHudCard(jobId, title) {
     return card;
 }
 
+card.querySelector('[data-cancel]').addEventListener('click', async () => {
+    try {
+        updateHudCard(jobId, {
+            statusText: 'RUŠÍM',
+            statusKind: 'err',
+            subText: 'Odesílám požadavek na zrušení…',
+            metaText: '—'
+        });
+
+        const r = await fetch(`${API_CONFIG.prehrajto}/download/cancel/${encodeURIComponent(jobId)}`, {
+            method: 'POST'
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.success) throw new Error(j.error || 'Cancel selhal');
+
+        // finální stav přijde i přes SSE, ale ať je UI hned “živé”
+        updateHudCard(jobId, {
+            statusText: 'ZRUŠENO',
+            statusKind: 'err',
+            subText: 'Stahování zrušeno, soubory smazány.',
+            metaText: ''
+        });
+
+        showToast('Stahování zrušeno', 'warning', 3000);
+    } catch (e) {
+        showToast(`Nepodařilo se zrušit: ${e.message}`, 'error', 5000);
+    }
+});
+
 function updateHudCard(jobId, patch) {
     const card = document.querySelector(`.download-hud-card[data-job-id="${jobId}"]`);
     if (!card) return;

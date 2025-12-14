@@ -1080,3 +1080,13 @@ h1, h2, h3, h4, h5, h6 {
 
 .download-hud-status.ok{ color: var(--color-glitch-green); }
 .download-hud-status.err{ color: var(--color-glitch-magenta); }
+
+.download-hud-iconbtn.danger{
+    border-color: #ff0033 !important;
+    color: #ff0033 !important;
+}
+.download-hud-iconbtn.danger:hover{
+    background: #ff0033 !important;
+    border-color: #ff0033 !important;
+    color: #000 !important;
+}
