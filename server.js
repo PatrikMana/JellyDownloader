@@ -11,6 +11,10 @@ const https = require('https');
 const { pipeline } = require('stream');
 const { promisify } = require('util');
 const pipelineAsync = promisify(pipeline);
+const crypto = require('crypto');
+const { EventEmitter } = require('events');
+
+const downloadJobs = new Map(); // jobId -> { emitter, ...state }
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -29,6 +33,28 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+
+function createJob(initial) {
+    const jobId = crypto.randomUUID();
+    const emitter = new EventEmitter();
+    const job = {
+        jobId,
+        emitter,
+        status: 'queued',
+        createdAt: Date.now(),
+        ...initial
+    };
+    downloadJobs.set(jobId, job);
+    return job;
+}
+
+function emitJob(job, payload) {
+    job.emitter.emit('evt', payload);
+}
+
+function cleanupJobLater(jobId, ms = 60 * 60 * 1000) { // 1h
+    setTimeout(() => downloadJobs.delete(jobId), ms).unref?.();
+}
 
 // Serve static files
 app.get('/', (req, res) => {
@@ -96,6 +122,33 @@ app.get('/api/search/:searchTerm', async (req, res) => {
       details: error.message
     });
   }
+});
+
+app.get('/api/download/progress/:jobId', (req, res) => {
+    const job = downloadJobs.get(req.params.jobId);
+    if (!job) return res.status(404).end();
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    // initial snapshot
+    send({ type: 'hello', jobId: job.jobId, status: job.status });
+
+    const onEvt = (payload) => send(payload);
+    job.emitter.on('evt', onEvt);
+
+    // keepalive
+    const ka = setInterval(() => res.write(`: ping\n\n`), 15000);
+
+    req.on('close', () => {
+        clearInterval(ka);
+        job.emitter.off('evt', onEvt);
+        res.end();
+    });
 });
 
 // API endpoint pre získanie video URL
@@ -514,185 +567,179 @@ function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
 
 // Download endpoint
 app.post('/api/download', async (req, res) => {
-    try {
-        const { videoUrl, title, imdbData, type = 'movie', subtitles = [] } = req.body;
-        
-        if (!videoUrl || !title) {
-            return res.status(400).json({
-                success: false,
-                error: 'Chybí povinné parametry (videoUrl, title)'
+    const { videoUrl, title, imdbData, type = 'movie', subtitles = [], season = null, episode = null } = req.body;
+
+    if (!videoUrl || !title) {
+        return res.status(400).json({ success: false, error: 'Chybí povinné parametry (videoUrl, title)' });
+    }
+
+    // vytvoř job
+    const job = createJob({ title, type });
+    cleanupJobLater(job.jobId);
+
+    // okamžitě vrať jobId
+    res.json({ success: true, jobId: job.jobId });
+
+    // a teď teprve dělej download
+    (async () => {
+        let videoPath = null;
+
+        try {
+            job.status = 'downloading';
+            emitJob(job, { type: 'progress', jobId: job.jobId, progress: 0, downloadedBytes: 0, totalBytes: 0, speedBps: 0, etaSec: null });
+
+            // Get video file extension from URL
+            const urlExt = videoUrl.match(/\.(mp4|mkv|avi|webm)(?:[?#]|$)/i);
+            const videoExt = urlExt ? urlExt[1] : 'mp4';
+
+            const downloadDir = getJellyfinPath(title, imdbData, type, season);
+            const baseFilename = generateJellyfinFilename(title, imdbData, type, season, episode);
+            const videoFilename = `${baseFilename}.${videoExt}`;
+            videoPath = path.join(downloadDir, videoFilename);
+
+            if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
+
+            const videoResponse = await axios({
+                method: 'GET',
+                url: videoUrl,
+                responseType: 'stream',
+                timeout: 0,
+                maxRedirects: 5,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Referer': 'https://prehrajto.cz/',
+                    'Accept': '*/*',
+                    'Connection': 'keep-alive'
+                }
+            });
+
+            const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
+
+            let downloadedBytes = 0;
+            let lastTickBytes = 0;
+            let lastTickTime = Date.now();
+            const startTime = Date.now();
+
+            const writeStream = fs.createWriteStream(videoPath);
+
+            videoResponse.data.on('data', (chunk) => {
+                downloadedBytes += chunk.length;
+
+                const now = Date.now();
+                if (now - lastTickTime >= 1000) {
+                    const dt = (now - lastTickTime) / 1000;
+                    const dB = downloadedBytes - lastTickBytes;
+                    const speed = dt > 0 ? (dB / dt) : 0;
+                    const etaSec = (totalBytes > 0 && speed > 0) ? ((totalBytes - downloadedBytes) / speed) : null;
+                    const progress = totalBytes > 0 ? (downloadedBytes / totalBytes * 100) : 0;
+
+                    emitJob(job, {
+                        type: 'progress',
+                        jobId: job.jobId,
+                        downloadedBytes,
+                        totalBytes,
+                        progress,
+                        speedBps: speed,
+                        etaSec,
+                        elapsedSec: (now - startTime) / 1000
+                    });
+
+                    lastTickBytes = downloadedBytes;
+                    lastTickTime = now;
+                }
+            });
+
+            await pipelineAsync(videoResponse.data, writeStream);
+
+            // titulky (ponechávám tvůj přístup; pokud titulky nejsou přímo stažitelné, může být potřeba upravit)
+            const subtitleFiles = [];
+            for (const subtitle of subtitles) {
+                try {
+                    const subtitleFilename = `${baseFilename}.${subtitle.language}.srt`;
+                    const subtitlePath = path.join(downloadDir, subtitleFilename);
+
+                    const subtitleResponse = await axios({
+                        method: 'GET',
+                        url: subtitle.url,
+                        responseType: 'stream',
+                        timeout: 15000,
+                        headers: { 'User-Agent': 'Mozilla/5.0' }
+                    });
+
+                    const subtitleWriteStream = fs.createWriteStream(subtitlePath);
+                    await pipelineAsync(subtitleResponse.data, subtitleWriteStream);
+                    subtitleFiles.push(subtitleFilename);
+                } catch (e) {
+                    // ignore failed subtitles
+                }
+            }
+
+            // metadata
+            const metadataFilename = `${baseFilename}.nfo`;
+            const metadataPath = path.join(downloadDir, metadataFilename);
+
+            const metadata = type === 'movie'
+                ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+  <title>${escapeXml(title)}</title>
+  <originaltitle>${escapeXml(imdbData?.Title || title)}</originaltitle>
+  <year>${imdbData?.Year || ''}</year>
+  <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
+  <runtime>${imdbData?.Runtime || ''}</runtime>
+  <genre>${imdbData?.Genre || ''}</genre>
+  <director>${imdbData?.Director || ''}</director>
+  <actor>${imdbData?.Actors || ''}</actor>
+  <id>${imdbData?.imdbID || ''}</id>
+  <imdbid>${imdbData?.imdbID || ''}</imdbid>
+  <rating>${imdbData?.imdbRating || ''}</rating>
+  <poster>${imdbData?.Poster || ''}</poster>
+</movie>`
+                : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<tvshow>
+  <title>${escapeXml(title)}</title>
+  <year>${imdbData?.Year || ''}</year>
+  <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
+  <genre>${imdbData?.Genre || ''}</genre>
+  <id>${imdbData?.imdbID || ''}</id>
+  <imdbid>${imdbData?.imdbID || ''}</imdbid>
+  <rating>${imdbData?.imdbRating || ''}</rating>
+</tvshow>`;
+
+            fs.writeFileSync(metadataPath, metadata, 'utf8');
+
+            job.status = 'done';
+
+            emitJob(job, {
+                type: 'done',
+                jobId: job.jobId,
+                files: {
+                    video: path.basename(videoPath),
+                    subtitles: subtitleFiles,
+                    metadata: metadataFilename
+                },
+                path: downloadDir,
+                jellyfinReady: JELLYFIN_DIR !== null,
+                instructions: JELLYFIN_DIR
+                    ? 'Soubory jsou připravené pro Jellyfin. Spusťte Library Scan v Jellyfin.'
+                    : `Soubory jsou v: ${downloadDir}. Přesuněte je do Jellyfin knihovny a spusťte Library Scan.`
+            });
+
+        } catch (error) {
+            job.status = 'error';
+
+            // clean up partial file
+            if (videoPath && fs.existsSync(videoPath)) {
+                try { fs.unlinkSync(videoPath); } catch {}
+            }
+
+            emitJob(job, {
+                type: 'error',
+                jobId: job.jobId,
+                error: error?.message || 'Stahování selhalo'
             });
         }
-        
-        console.log('📥 Starting download for:', title);
-        console.log('📁 Type:', type, '| IMDB:', imdbData?.imdbID);
-        
-        // Get video file extension from URL
-        const urlExt = videoUrl.match(/\.(mp4|mkv|avi|webm)(?:[?#]|$)/i);
-        const videoExt = urlExt ? urlExt[1] : 'mp4';
-        
-        // Generate Jellyfin-compatible paths
-        const season = req.body.season || null;
-        const episode = req.body.episode || null;
-        const downloadDir = getJellyfinPath(title, imdbData, type, season);
-        const baseFilename = generateJellyfinFilename(title, imdbData, type, season, episode);
-        const videoFilename = `${baseFilename}.${videoExt}`;
-        const videoPath = path.join(downloadDir, videoFilename);
-        
-        // Create download directory if it doesn't exist
-        if (!fs.existsSync(downloadDir)) {
-            fs.mkdirSync(downloadDir, { recursive: true });
-            console.log('📁 Created directory:', downloadDir);
-        }
-        
-        // Start video download
-        console.log('📺 Downloading video to:', videoFilename);
-        
-        // Get video stream
-        const videoResponse = await axios({
-            method: 'GET',
-            url: videoUrl,
-            responseType: 'stream',
-            timeout: 0, // No timeout - let it download
-            maxRedirects: 5,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://prehrajto.cz/',
-                'Accept': '*/*',
-                'Connection': 'keep-alive'
-            }
-        });
-        
-        // Create write stream
-        const writeStream = fs.createWriteStream(videoPath);
-        
-        // Track download progress
-        let downloadedBytes = 0;
-        const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
-        
-        videoResponse.data.on('data', (chunk) => {
-            downloadedBytes += chunk.length;
-            const progress = totalBytes > 0 ? (downloadedBytes / totalBytes * 100).toFixed(1) : 0;
-            
-            // You could emit progress via WebSocket here
-            console.log(`📊 Download progress: ${progress}% (${downloadedBytes}/${totalBytes} bytes)`);
-        });
-        
-        // Start download
-        await pipelineAsync(videoResponse.data, writeStream);
-        
-        console.log('✅ Video download completed:', videoFilename);
-        
-        // Download subtitles if provided
-        const subtitleFiles = [];
-        for (const subtitle of subtitles) {
-            try {
-                const subtitleFilename = `${baseFilename}.${subtitle.language}.srt`;
-                const subtitlePath = path.join(downloadDir, subtitleFilename);
-                
-                console.log('📝 Downloading subtitle:', subtitleFilename);
-                
-                const subtitleResponse = await axios({
-                    method: 'GET',
-                    url: subtitle.url,
-                    responseType: 'stream',
-                    timeout: 15000,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
-                });
-                
-                const subtitleWriteStream = fs.createWriteStream(subtitlePath);
-                await pipelineAsync(subtitleResponse.data, subtitleWriteStream);
-                
-                subtitleFiles.push(subtitleFilename);
-                console.log('✅ Subtitle downloaded:', subtitleFilename);
-            } catch (subtitleError) {
-                console.error('❌ Subtitle download failed:', subtitle.language, subtitleError.message);
-            }
-        }
-        
-        // Create metadata file for Jellyfin
-        const metadataFilename = `${baseFilename}.nfo`;
-        const metadataPath = path.join(downloadDir, metadataFilename);
-        
-        const metadata = type === 'movie' ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<movie>
-    <title>${escapeXml(title)}</title>
-    <originaltitle>${escapeXml(imdbData?.Title || title)}</originaltitle>
-    <year>${imdbData?.Year || ''}</year>
-    <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
-    <runtime>${imdbData?.Runtime || ''}</runtime>
-    <genre>${imdbData?.Genre || ''}</genre>
-    <director>${imdbData?.Director || ''}</director>
-    <actor>${imdbData?.Actors || ''}</actor>
-    <id>${imdbData?.imdbID || ''}</id>
-    <imdbid>${imdbData?.imdbID || ''}</imdbid>
-    <rating>${imdbData?.imdbRating || ''}</rating>
-    <poster>${imdbData?.Poster || ''}</poster>
-</movie>` : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<tvshow>
-    <title>${escapeXml(title)}</title>
-    <year>${imdbData?.Year || ''}</year>
-    <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
-    <genre>${imdbData?.Genre || ''}</genre>
-    <id>${imdbData?.imdbID || ''}</id>
-    <imdbid>${imdbData?.imdbID || ''}</imdbid>
-    <rating>${imdbData?.imdbRating || ''}</rating>
-</tvshow>`;
-        
-        fs.writeFileSync(metadataPath, metadata, 'utf8');
-        console.log('✅ Metadata file created:', metadataFilename);
-        
-        res.json({
-            success: true,
-            message: 'Stahování dokončeno',
-            files: {
-                video: videoFilename,
-                subtitles: subtitleFiles,
-                metadata: metadataFilename
-            },
-            path: downloadDir,
-            jellyfinReady: JELLYFIN_DIR !== null,
-            instructions: JELLYFIN_DIR 
-                ? 'Soubory jsou připravené pro Jellyfin. Spusťte Library Scan v Jellyfin.'
-                : `Soubory jsou v: ${downloadDir}. Přesuněte je do Jellyfin knihovny a spusťte Library Scan.`
-        });
-        
-    } catch (error) {
-        console.error('❌ Download error:', error.message);
-        console.error('Error details:', error.code, error.response?.status);
-        
-        // Clean up partial download
-        if (videoPath && fs.existsSync(videoPath)) {
-            try {
-                fs.unlinkSync(videoPath);
-                console.log('🗑️ Cleaned up partial download');
-            } catch (cleanupError) {
-                console.error('Failed to clean up:', cleanupError.message);
-            }
-        }
-        
-        let errorMessage = error.message;
-        if (error.code === 'ECONNABORTED') {
-            errorMessage = 'Stahování bylo přerušeno - zkuste to znovu';
-        } else if (error.code === 'ETIMEDOUT') {
-            errorMessage = 'Timeout - video server neodpovídá';
-        } else if (error.response?.status === 404) {
-            errorMessage = 'Video soubor nebyl nalezen (404)';
-        } else if (error.response?.status === 403) {
-            errorMessage = 'Přístup zamítnut (403) - možná je potřeba jiný referer';
-        }
-        
-        res.status(500).json({
-            success: false,
-            error: `Chyba při stahování: ${errorMessage}`,
-            code: error.code,
-            details: error.message
-        });
-    }
+    })();
 });
-
 // Get downloads list
 app.get('/api/downloads', (req, res) => {
     try {

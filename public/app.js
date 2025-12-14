@@ -57,6 +57,97 @@ function getToastIcon(type) {
     return icons[type] || 'info-circle';
 }
 
+function formatBytes(n) {
+    if (!Number.isFinite(n) || n <= 0) return '0 B';
+    const units = ['B','KB','MB','GB','TB'];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function formatSeconds(sec) {
+    if (!Number.isFinite(sec) || sec < 0) return '—';
+    sec = Math.round(sec);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function ensureHud() {
+    let hud = document.getElementById('download-hud');
+    if (!hud) {
+        hud = document.createElement('div');
+        hud.id = 'download-hud';
+        hud.className = 'download-hud';
+        document.body.appendChild(hud);
+    }
+    return hud;
+}
+
+function createHudCard(jobId, title) {
+    const hud = ensureHud();
+
+    const card = document.createElement('div');
+    card.className = 'download-hud-card';
+    card.dataset.jobId = jobId;
+
+    card.innerHTML = `
+      <div class="download-hud-top">
+        <div style="min-width: 0;">
+          <div class="download-hud-title">${escapeHtml(title || 'Stahování')}</div>
+          <div class="download-hud-sub" data-sub>Inicializuji…</div>
+        </div>
+        <div class="download-hud-actions">
+          <button class="download-hud-iconbtn" data-close title="Skrýt">
+            <i class="fas fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="download-hud-bar">
+        <div class="download-hud-fill" data-fill></div>
+      </div>
+
+      <div class="download-hud-meta">
+        <div><span class="download-hud-status" data-status>ČEKÁM</span></div>
+        <div data-meta>0% • 0 B/s • ETA —</div>
+      </div>
+    `;
+
+    card.querySelector('[data-close]').addEventListener('click', () => {
+        card.remove();
+    });
+
+    hud.prepend(card);
+    return card;
+}
+
+function updateHudCard(jobId, patch) {
+    const card = document.querySelector(`.download-hud-card[data-job-id="${jobId}"]`);
+    if (!card) return;
+
+    const fill = card.querySelector('[data-fill]');
+    const sub = card.querySelector('[data-sub]');
+    const statusEl = card.querySelector('[data-status]');
+    const meta = card.querySelector('[data-meta]');
+
+    if (typeof patch.progress === 'number') {
+        fill.style.width = `${Math.max(0, Math.min(100, patch.progress))}%`;
+    }
+    if (patch.subText) sub.textContent = patch.subText;
+
+    if (patch.statusText) {
+        statusEl.textContent = patch.statusText;
+        statusEl.classList.toggle('ok', patch.statusKind === 'ok');
+        statusEl.classList.toggle('err', patch.statusKind === 'err');
+    }
+
+    if (patch.metaText) meta.textContent = patch.metaText;
+}
+
 /**
  * Escape HTML
  */
@@ -948,54 +1039,112 @@ async function startDownload(item) {
         const downloadData = {
             videoUrl: item.url,
             title: item.title,
-            imdbData: imdbData,
+            imdbData: item.imdbInfo || null,
             type: currentMode,
             subtitles: item.subtitles || [],
             season: item.season || null,
             episode: item.episode || null
         };
-        
+
         showToast('Zahajuji stahování...', 'info');
-        
+
+        // 1) Start job (rychlá odpověď s jobId)
         const response = await fetch(`${API_CONFIG.prehrajto}/download`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(downloadData)
         });
-        
+
         const result = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(result.error || 'Download API chyba');
-        }
-        
-        if (result.success) {
-            console.log('✅ Download completed:', result.files);
-            
-            // Show detailed success message
-            const jellyfinMsg = result.jellyfinReady 
-                ? '✅ Soubory jsou připraveny pro Jellyfin!' 
-                : '⚠️ Přesuňte soubory do Jellyfin knihovny';
-            
-            showToast(`${jellyfinMsg}\n${result.files.video}`, 'success', 5000);
-            
-            // Show download info
-            showDownloadComplete({
-                ...item,
-                completed: true,
-                files: result.files,
-                path: result.path,
-                jellyfinReady: result.jellyfinReady,
-                instructions: result.instructions
+        if (!response.ok) throw new Error(result.error || 'Download API chyba');
+        if (!result.success || !result.jobId) throw new Error(result.error || 'Nepodařilo se vytvořit download job');
+
+        const jobId = result.jobId;
+
+        // 2) Widget vpravo dole
+        createHudCard(jobId, item.title);
+        updateHudCard(jobId, {
+            progress: 0,
+            subText: 'Navazuji spojení…',
+            statusText: 'START',
+            statusKind: ''
+        });
+
+        // 3) SSE stream (progress)
+        const es = new EventSource(`${API_CONFIG.prehrajto}/download/progress/${encodeURIComponent(jobId)}`);
+
+        es.onmessage = (ev) => {
+            let data;
+            try { data = JSON.parse(ev.data); } catch { return; }
+
+            if (data.type === 'progress') {
+                const pct = (data.totalBytes > 0) ? (data.downloadedBytes / data.totalBytes * 100) : data.progress || 0;
+                const speed = data.speedBps || 0;
+                const eta = data.etaSec;
+
+                updateHudCard(jobId, {
+                    progress: pct,
+                    subText: `${formatBytes(data.downloadedBytes)} / ${data.totalBytes ? formatBytes(data.totalBytes) : '—'}`,
+                    statusText: 'STAHUJU',
+                    statusKind: '',
+                    metaText: `${Math.round(pct)}% • ${formatBytes(speed)}/s • ETA ${formatSeconds(eta)}`
+                });
+            }
+
+            if (data.type === 'done') {
+                es.close();
+
+                updateHudCard(jobId, {
+                    progress: 100,
+                    subText: data.files?.video ? `✅ ${data.files.video}` : '✅ Hotovo',
+                    statusText: 'HOTOVO',
+                    statusKind: 'ok',
+                    metaText: `100% • ${data.path || ''}`.trim()
+                });
+
+                // zachovej tvoje “detailní” UI pokud chceš:
+                showToast('✅ Staženo', 'success', 4000);
+                showDownloadComplete({
+                    ...item,
+                    completed: true,
+                    files: data.files,
+                    path: data.path,
+                    jellyfinReady: data.jellyfinReady,
+                    instructions: data.instructions
+                });
+            }
+
+            if (data.type === 'error') {
+                es.close();
+
+                updateHudCard(jobId, {
+                    statusText: 'CHYBA',
+                    statusKind: 'err',
+                    subText: data.error || 'Stahování selhalo',
+                    metaText: '—'
+                });
+
+                showToast(`Chyba při stahování: ${data.error || 'neznámá chyba'}`, 'error', 6000);
+            }
+        };
+
+        es.onerror = () => {
+            // pokud server zavře spojení bez done/error, necháme kartu a uživateli to řekneme
+            updateHudCard(jobId, {
+                statusText: 'SPOJENÍ',
+                statusKind: 'err',
+                subText: 'Ztraceno SSE spojení (server?)',
+                metaText: '—'
             });
-        } else {
-            throw new Error(result.error || 'Download se nezdařil');
-        }
+            try { es.close(); } catch {}
+        };
+
+        return jobId;
+
     } catch (error) {
         console.error('❌ Download error:', error);
         showToast(`Chyba při stahování: ${error.message}`, 'error', 5000);
+        throw error;
     }
 }
 
