@@ -104,9 +104,6 @@ function createHudCard(jobId, title) {
           <button class="download-hud-iconbtn danger" data-cancel title="Zrušit a smazat">
             <i class="fas fa-trash"></i>
           </button>
-          <button class="download-hud-iconbtn" data-close title="Skrýt">
-            <i class="fas fa-xmark"></i>
-          </button>
         </div>
       </div>
 
@@ -119,11 +116,6 @@ function createHudCard(jobId, title) {
         <div data-meta>0% • 0 B/s • ETA —</div>
       </div>
     `;
-
-    // close
-    card.querySelector('[data-close]').addEventListener('click', () => {
-        card.remove();
-    });
 
     // cancel
     card.querySelector('[data-cancel]').addEventListener('click', async () => {
@@ -150,6 +142,12 @@ function createHudCard(jobId, title) {
             });
 
             showToast('Stahování zrušeno', 'warning', 3000);
+
+            // Automaticky smaž widget po 5 sekundách s animací
+            setTimeout(() => {
+                card.classList.add('removing');
+                setTimeout(() => card.remove(), 300); // počkej na animaci
+            }, 5000);
         } catch (e) {
             showToast(`Nepodařilo se zrušit: ${e.message}`, 'error', 5000);
         }

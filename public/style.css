@@ -888,6 +888,17 @@ h1, h2, h3, h4, h5, h6 {
     }
 }
 
+@keyframes slideOutRight {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+}
+
 @keyframes rotate {
     from {
         transform: rotate(0deg);
@@ -997,6 +1008,33 @@ h1, h2, h3, h4, h5, h6 {
     border-radius: 10px;
     padding: 12px 12px 10px;
     backdrop-filter: blur(10px);
+    animation: slideInFromRight 0.4s ease-out forwards;
+}
+
+.download-hud-card.removing{
+    animation: slideOutToRight 0.3s ease-in forwards;
+}
+
+@keyframes slideInFromRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOutToRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
 }
 
 .download-hud-top{

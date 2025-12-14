@@ -512,6 +512,29 @@ app.get('/api/subtitles/:title/:year?', async (req, res) => {
     }
 });
 
+function removeEmptyDirsUp(startDir, stopAtDir) {
+  if (!startDir || !stopAtDir) return;
+
+  const stop = path.resolve(stopAtDir);
+  let cur = path.resolve(startDir);
+
+  while (cur.startsWith(stop)) {
+    if (cur === stop) break;
+
+    try {
+      if (!fs.existsSync(cur)) break;
+
+      const entries = fs.readdirSync(cur);
+      if (entries.length > 0) break;      // není prázdná -> končíme
+
+      fs.rmdirSync(cur);                  // smaž jen prázdnou
+      cur = path.dirname(cur);            // jdi o level výš
+    } catch {
+      break;
+    }
+  }
+}
+
 // Helper function to generate Jellyfin-compatible filename
 function generateJellyfinFilename(title, imdbData, type = 'movie', season = null, episode = null) {
     // Clean title (remove invalid filename characters)
@@ -593,6 +616,7 @@ app.post('/api/download', async (req, res) => {
             const videoExt = urlExt ? urlExt[1] : 'mp4';
 
             const downloadDir = getJellyfinPath(title, imdbData, type, season);
+            job.downloadDir = downloadDir; // aby to cancel endpoint vždycky znal
             const baseFilename = generateJellyfinFilename(title, imdbData, type, season, episode);
             const videoFilename = `${baseFilename}.${videoExt}`;
             videoPath = path.join(downloadDir, videoFilename);
@@ -738,7 +762,10 @@ app.post('/api/download', async (req, res) => {
         } catch (error) {
             // Pokud už někdo mezitím dal cancel, ber to jako "canceled", ne jako error
             if (job.status === 'canceled') {
-                // (soubory už endpoint cancel zkusil mazat, ale pro jistotu můžeš znovu)
+                // smaž prázdnou složku (soubory už endpoint cancel zkusil mazat)
+                const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+                removeEmptyDirsUp(job.downloadDir, baseDir);
+
                 emitJob(job, {
                     type: 'canceled',
                     jobId: job.jobId,
@@ -795,6 +822,10 @@ app.post('/api/download/cancel/:jobId', async (req, res) => {
             if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
         } catch {}
     }
+
+    // ✅ smaž prázdnou složku (a prázdné rodiče)
+    const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+    removeEmptyDirsUp(job.downloadDir, baseDir);
 
     emitJob(job, {
         type: 'canceled',
