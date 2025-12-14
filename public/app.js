@@ -72,8 +72,10 @@ function formatSeconds(sec) {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = sec % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-    return `${m}:${String(s).padStart(2,'0')}`;
+    
+    if (h > 0) return `${h}h ${m}min`;
+    if (m > 0) return `${m}min`;
+    return `${s}s`;
 }
 
 function ensureHud() {
@@ -1119,7 +1121,7 @@ async function startDownload(item) {
                     subText: `${formatBytes(data.downloadedBytes)} / ${data.totalBytes ? formatBytes(data.totalBytes) : '—'}`,
                     statusText: 'STAHUJU',
                     statusKind: '',
-                    metaText: `${Math.round(pct)}% • ${formatBytes(speed)}/s • ETA ${formatSeconds(eta)}`
+                    metaText: `${Math.round(pct)}% • ${formatBytes(speed)}/s • ${formatSeconds(eta)}`
                 });
             }
 
