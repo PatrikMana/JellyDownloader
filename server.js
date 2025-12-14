@@ -260,23 +260,15 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
 // IMDB API endpoint
 app.get('/api/imdb/:title/:year?', async (req, res) => {
     try {
-        let { title, year } = req.params;
-        const originalTitle = title;
-        
-        // Očisti title pro lepší matching
-        title = cleanTitleForSearch(title);
-        
-        // Pokus se extrahovat rok, pokud není zadán
-        if (!year) {
-            year = extractYear(originalTitle);
-        }
+        const rawTitle = req.params.title;
+        const yearParam = req.params.year || null;
         
         if (OMDB_API_KEY === 'your-api-key-here') {
             // Mock IMDB data for development
             const mockData = {
                 imdbID: 'tt' + Math.random().toString().substring(2, 9),
-                Title: title,
-                Year: year || new Date().getFullYear().toString(),
+                Title: rawTitle,
+                Year: yearParam || new Date().getFullYear().toString(),
                 Type: 'movie',
                 Genre: 'Action, Drama',
                 Director: 'Unknown Director',
@@ -286,68 +278,47 @@ app.get('/api/imdb/:title/:year?', async (req, res) => {
                 imdbRating: '7.5'
             };
             
-            console.log('📺 Returning mock IMDB data for:', title);
+            console.log('📺 [IMDB][MOCK] raw="%s" | returning mock', rawTitle);
             return res.json({ success: true, data: mockData });
         }
         
-        // 1. Zkus přesný match s t=
-        let searchUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&t=${encodeURIComponent(title)}${year ? `&y=${year}` : ''}`;
+        // Zavolej advanced resolver
+        const result = await resolveImdb(rawTitle, yearParam);
         
-        console.log('🔍 Searching IMDB (exact) for:', title, year ? `(${year})` : '');
-        let response = await axios.get(searchUrl, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-        
-        if (response.data.Response === 'True') {
-            console.log('✅ IMDB data found (exact):', response.data.Title);
-            return res.json({ success: true, data: response.data });
-        }
-        
-        // 2. Fallback: hledej pomocí s= a vyber nejlepší shodu
-        console.log('⚠️ Exact match failed, trying search...');
-        searchUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&s=${encodeURIComponent(title)}&type=movie`;
-        
-        response = await axios.get(searchUrl, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-        
-        if (response.data.Response === 'True' && response.data.Search && response.data.Search.length > 0) {
-            // Vyber nejlepší shodu (první výsledek nebo s matchujícím rokem)
-            let bestMatch = response.data.Search[0];
+        // Logování do Node konzole
+        if (result.found) {
+            const d = result.data;
+            console.log(
+                `[IMDB][FOUND] raw="${rawTitle}" | clean="${result.queryTitle}" | ` +
+                `year=${result.year || 'N/A'} | type=${result.type} | method=${result.method} | ` +
+                `alias=${result.alias || 'none'} | ep=${result.ep ? `S${result.ep.season}E${result.ep.episode}` : 'none'} | ` +
+                `-> "${d.Title}" (${d.Year}) ${d.imdbID}`
+            );
             
-            if (year) {
-                const yearMatch = response.data.Search.find(m => m.Year === year);
-                if (yearMatch) bestMatch = yearMatch;
+            // Pokud byla search fallback, ukaž kandidáty
+            if (result.pickedFromSearch) {
+                console.log(`  [IMDB][SEARCH] score=${result.pickedFromSearch.bestScore} | candidates=[${result.pickedFromSearch.candidates.join(', ')}]`);
             }
             
-            // Dotahni detail
-            const detailUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${bestMatch.imdbID}`;
-            const detailResponse = await axios.get(detailUrl, {
-                timeout: 10000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
+            return res.json({ success: true, data: result.data });
+        } else {
+            console.log(
+                `[IMDB][NOTFOUND] raw="${rawTitle}" | clean="${result.queryTitle}" | ` +
+                `year=${result.year || 'N/A'} | type=${result.type} | method=${result.method} | ` +
+                `alias=${result.alias || 'none'} | ep=${result.ep ? `S${result.ep.season}E${result.ep.episode}` : 'none'}`
+            );
+            
+            if (result.candidates) {
+                console.log(`  [IMDB][SEARCH] no pick, candidates=[${result.candidates.join(', ')}]`);
+            }
+            
+            return res.status(404).json({
+                success: false,
+                error: 'Film nebyl v IMDB databázi nalezen'
             });
-            
-            if (detailResponse.data.Response === 'True') {
-                console.log('✅ IMDB data found (search):', detailResponse.data.Title);
-                return res.json({ success: true, data: detailResponse.data });
-            }
         }
-        
-        console.log('❌ IMDB not found:', response.data.Error);
-        res.status(404).json({
-            success: false,
-            error: response.data.Error || 'Film nebyl v IMDB databázi nalezen'
-        });
     } catch (error) {
-        console.error('Chyba při IMDB vyhledávání:', error.message);
+        console.error('[IMDB][ERROR]', error.message);
         res.status(500).json({
             success: false,
             error: 'Nepodařilo se získat IMDB informace'
@@ -556,27 +527,363 @@ app.get('/api/subtitles/:title/:year?', async (req, res) => {
     }
 });
 
-// Helper function to clean title for IMDB search
-function cleanTitleForSearch(raw) {
-    if (!raw) return '';
-    let s = raw;
+// Advanced IMDB resolver with aliases and fallback
+// === ROBUST TITLE PARSING PIPELINE ===
 
-    // zahodě typické release tagy
-    s = s.replace(/\b(2160p|1080p|720p|480p|4k|uhd|fhd|hdr|dv)\b/ig, '');
-    s = s.replace(/\b(web[-_. ]?dl|webrip|brrip|bluray|dvdrip|hdtv|cam|ts)\b/ig, '');
-    s = s.replace(/\b(x264|x265|h\.?264|h\.?265|hevc|aac|ac3|dts)\b/ig, '');
-    s = s.replace(/\b(cz|cesky|česky|dabing|dubbing|titulky|subs|sk|slovak|dual)\b/ig, '');
+function stripDiacritics(s) {
+    return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
 
-    // smaž závorky/hranataté věci co často nesou tagy
-    s = s.replace(/\[[^\]]*]/g, ' ');
-    s = s.replace(/\([^)]*(1080p|720p|web|bluray|dabing|cz|sk|titulky)[^)]*\)/ig, ' ');
+const EP_RE = /\bS(\d{1,2})E(\d{1,2})\b|\b(\d{1,2})x(\d{1,2})\b/i;
+const YEAR_RE = /\b(19\d{2}|20\d{2})\b/;
 
-    // tečky/underscore -> mezery
-    s = s.replace(/[._]+/g, ' ');
+// všechen "bordel" co se typicky objevuje v názvech z prehrajto
+const JUNK_RE = new RegExp(
+    String.raw`\b(` +
+    [
+        // jazyk/audio
+        `cz`, `czech`, `cesky`, `česky`, `čeština`,
+        `sk`, `slovak`, `slovensky`, `slovenčina`,
+        `en`, `eng`, `english`, `dual`, `multi`,
+        `dab`, `dabing`, `dubbing`, `czdab`, `czdabing`, `dub`,
+        `titulky`, `tit`, `sub`, `subs`, `subtitle`, `forced`,
 
-    // whitespace
-    s = s.replace(/\s+/g, ' ').trim();
+        // kvalita / rozlišení
+        `4k`, `uhd`, `fhd`, `hdr`, `dv`, `dolby\\s*vision`,
+        `2160p`, `1080p`, `720p`, `480p`,
+
+        // zdroj
+        `web[-_. ]?dl`, `webrip`, `bluray`, `brrip`, `bdrip`, `dvdrip`, `hdtv`, `cam`, `ts`,
+
+        // kodeky
+        `x264`, `x265`, `h\\.?264`, `h\\.?265`, `hevc`,
+        `aac`, `ac3`, `dts`, `truehd`, `atmos`,
+
+        // "marketing" slova z uploadů
+        `topkvalita`, `super\\s*film`, `uhdrdv`, `tuta`
+    ].join('|') +
+    String.raw`)\b`,
+    'ig'
+);
+
+// odstranění file extensions a divných oddělovačů
+function normalizeSeparators(s) {
+    return s
+        .replace(/\.(mp4|mkv|avi|webm)\b/ig, ' ')
+        .replace(/[+_.]/g, ' ')
+        .replace(/[-–—]/g, ' ')
+        .replace(/[!?~]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// odstranit závorky/hranaté závorky, ALE nevyhodit rok když je uvnitř
+function stripBracketsButKeepYear(s) {
+    // (2022) -> nech rok, (CZ Dabing) -> pryč
+    s = s.replace(/\(([^)]*)\)/g, (m, inside) => {
+        const y = inside.match(YEAR_RE);
+        return y ? ` ${y[1]} ` : ' ';
+    });
+    s = s.replace(/\[([^\]]*)\]/g, ' '); // [1830] apod pryč
     return s;
+}
+
+function cleanForOmdb(raw) {
+    const original = (raw || '').toString().trim();
+    if (!original) return { original, clean: '', year: null, season: null, episode: null, isEpisode: false };
+
+    // 1) basic normalize
+    let s = original;
+    s = stripBracketsButKeepYear(s);
+    s = normalizeSeparators(s);
+    s = stripDiacritics(s);
+
+    // 2) episode detection (seriály)
+    let season = null, episode = null, isEpisode = false;
+    const epm = s.match(EP_RE);
+    if (epm) {
+        isEpisode = true;
+        season = parseInt(epm[1] || epm[3], 10);
+        episode = parseInt(epm[2] || epm[4], 10);
+        // odstraň SxxEyy / 1x02 z názvu
+        s = s.replace(EP_RE, ' ');
+    }
+
+    // 3) year extraction (a potom ho z názvu pryč)
+    let year = null;
+    const ym = s.match(YEAR_RE);
+    if (ym) year = parseInt(ym[1], 10);
+    s = s.replace(YEAR_RE, ' ');
+
+    // 4a) vyházej slepené jazyk+audio tagy typu "CZdabing", "CZDub", "ENsubs" apod.
+    s = s.replace(/\b(?:cz|sk|en)(?:\s*)?(?:dabing|dab|dub|dubbing|subs?|subtitle|titulky|tit)\b/ig, ' ');
+
+    // 4) vyházej junk tagy
+    s = s.replace(JUNK_RE, ' ');
+
+    // 5) poslední dočištění
+    s = s.replace(/\b(sezona|serie|rada)\b/ig, ' '); // "1-série" apod
+    s = s.replace(/\b\d+\s*serie\b/ig, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+
+    return { original, clean: s, year, season, episode, isEpisode };
+}
+
+/**
+ * Kandidáti pro OMDb v pořadí (od nejlepších po fallbacky)
+ * - vždy nakonec raw input uživatele
+ * - navíc: pokud titul končí " 1", zkus i verzi bez té jedničky (Avatar 1 -> Avatar)
+ */
+function buildOmdbCandidates(raw) {
+    const p = cleanForOmdb(raw);
+
+    const candidates = [];
+    const push = (title, year) => {
+        title = (title || '').trim();
+        if (!title) return;
+        const key = `${title.toLowerCase()}|${year || ''}`;
+        if (!candidates.some(c => `${c.title.toLowerCase()}|${c.year || ''}` === key)) {
+            candidates.push({ title, year: year || null });
+        }
+    };
+
+    // hlavní čistý název
+    push(p.clean, p.year);
+
+    // pokud končí "... 1", zkus i bez 1 (typicky Avatar 1)
+    if (/\b1$/.test(p.clean)) push(p.clean.replace(/\b1$/, '').trim(), p.year);
+
+    // bez roku (když rok byl špatně/nejistý)
+    push(p.clean, null);
+
+    // fallback: raw input (uživatel často napíše "správný" název)
+    // lehce normalizovaný (bez přípon), ale nechám obsah
+    const rawNorm = normalizeSeparators(stripDiacritics(raw));
+    push(rawNorm, null);
+
+    return { parsed: p, candidates };
+}
+
+// Legacy helpers (pro kompatibilitu)
+function normalizeBasic(s) {
+    return stripDiacritics(String(s || ''))
+        .toLowerCase()
+        .replace(/\+/g, ' ')
+        .replace(/[._]+/g, ' ')
+        .replace(/[\[\]{}()]/g, ' ')
+        .replace(/[^a-z0-9\s:,-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function extractYearAny(raw) {
+    const m = String(raw || '').match(YEAR_RE);
+    return m ? m[1] : null;
+}
+
+function detectEpisode(raw) {
+    const s = String(raw || '');
+    let m = s.match(EP_RE);
+    if (m) return { season: +(m[1] || m[3]), episode: +(m[2] || m[4]) };
+    return null;
+}
+
+function cleanTitleForSearch(raw) {
+    return cleanForOmdb(raw).clean;
+}
+
+// CZ -> EN aliases
+const TITLE_ALIASES = [
+    { match: /avatar.*legenda.*aangovi/i, title: 'Avatar: The Last Airbender', type: 'series' },
+    { match: /hra.*olihe[nň]/i, title: 'Squid Game', type: 'series' },
+    { match: /hra.*tr[uů]ny/i, title: 'Game of Thrones', type: 'series' },
+    { match: /ml[cč]en[ií].*jeh[nň][aá]tek/i, title: 'The Silence of the Lambs', type: 'movie' },
+    { match: /pod.*tosk[aá]nsk[yý]m.*sluncem/i, title: 'Under the Tuscan Sun', type: 'movie' },
+    { match: /j[ií]st.*meditovat.*milovat/i, title: 'Eat Pray Love', type: 'movie' },
+    { match: /hr[aá][cč]i.*se.*smrt[ií]/i, title: 'Flatliners', type: 'movie' },
+];
+
+function tokenOverlapScore(a, b) {
+    const A = new Set(normalizeBasic(a).split(' ').filter(Boolean));
+    const B = new Set(normalizeBasic(b).split(' ').filter(Boolean));
+    let hit = 0;
+    for (const t of A) if (B.has(t)) hit++;
+    return hit;
+}
+
+async function omdbGet(params) {
+    const url = `https://www.omdbapi.com/?apikey=${OMDB_API_KEY}&${params}`;
+    const r = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    
+    if (r.data?.Response === 'False' && r.data?.Error) {
+        console.log(`[OMDb] Response=False | params="${params}" | error="${r.data.Error}"`);
+    }
+    return r;
+}
+
+function pickImdbSuggestKey(q) {
+    const s = stripDiacritics(String(q || '').trim().toLowerCase());
+    const ch = s[0] || 'a';
+    return /[a-z0-9]/.test(ch) ? ch : 'a';
+}
+
+async function imdbSuggest(query) {
+    const q = stripDiacritics(String(query || '').trim());
+    if (!q) return [];
+
+    const key = pickImdbSuggestKey(q);
+    const url = `https://v2.sg.media-imdb.com/suggestion/${key}/${encodeURIComponent(q)}.json`;
+
+    try {
+        const r = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+        return Array.isArray(r.data?.d) ? r.data.d : [];
+    } catch {
+        return [];
+    }
+}
+
+async function resolveImdb(rawTitle, yearHint = null, typeHint = null) {
+    // Build candidates with new pipeline
+    const { parsed, candidates } = buildOmdbCandidates(rawTitle);
+    
+    // Check for alias match
+    let aliased = null;
+    for (const a of TITLE_ALIASES) {
+        if (a.match.test(rawTitle)) {
+            aliased = a;
+            // Add alias as first candidate
+            candidates.unshift({ title: a.title, year: parsed.year });
+            if (!typeHint) typeHint = a.type;
+            break;
+        }
+    }
+    
+    // Determine type
+    const finalType = typeHint || (parsed.isEpisode ? 'series' : 'movie');
+    
+    // Log parsing
+    console.log(
+        `[IMDB][PARSE] raw="${parsed.original}" | clean="${parsed.clean}" | year=${parsed.year || 'none'} | ep=${parsed.isEpisode ? `S${parsed.season}E${parsed.episode}` : 'none'}`
+    );
+    console.log(`[IMDB][TRY] ${candidates.map(c => `"${c.title}"${c.year ? `(${c.year})` : ''}`).join(' -> ')}`);
+    
+    // Try each candidate with t= (exact match)
+    for (const c of candidates) {
+        const params = `t=${encodeURIComponent(c.title)}${c.year ? `&y=${c.year}` : ''}&type=${finalType}`;
+        try {
+            const r = await omdbGet(params);
+            const d = r.data;
+            
+            if (d?.Response === 'True') {
+                console.log(`[IMDB][HIT] using="${c.title}"${c.year ? `(${c.year})` : ''} -> "${d.Title}" (${d.Year}) ${d.imdbID}`);
+                return {
+                    found: true,
+                    method: 't',
+                    queryTitle: c.title,
+                    year: c.year,
+                    type: finalType,
+                    data: d,
+                    ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+                    alias: aliased?.title || null
+                };
+            } else {
+                console.log(`[IMDB][MISS] using="${c.title}"${c.year ? `(${c.year})` : ''} err="${d?.Error || 'unknown'}"`);
+            }
+        } catch (err) {
+            console.log(`[IMDB][ERROR] candidate="${c.title}" | ${err.message}`);
+        }
+    }
+    
+    // Last resort: search fallback with best candidate
+    const bestCandidate = candidates[0];
+    if (bestCandidate) {
+        const sParams = `s=${encodeURIComponent(bestCandidate.title)}&type=${finalType}`;
+        try {
+            const r2 = await omdbGet(sParams);
+            if (r2.data?.Response === 'True' && Array.isArray(r2.data.Search)) {
+                const searchResults = r2.data.Search.slice(0, 8);
+                
+                let best = null;
+                let bestScore = -1;
+                
+                for (const sr of searchResults) {
+                    let score = 0;
+                    score += tokenOverlapScore(bestCandidate.title, sr.Title) * 2;
+                    if (bestCandidate.year && sr.Year && String(sr.Year).includes(String(bestCandidate.year))) score += 5;
+                    if (finalType && sr.Type === finalType) score += 1;
+                    if (score > bestScore) { bestScore = score; best = sr; }
+                }
+                
+                if (best?.imdbID) {
+                    const r3 = await omdbGet(`i=${encodeURIComponent(best.imdbID)}&plot=short`);
+                    if (r3.data?.Response === 'True') {
+                        console.log(`[IMDB][SEARCH-HIT] best="${best.Title}" (${best.Year}) score=${bestScore}`);
+                        return {
+                            found: true,
+                            method: 's->i',
+                            queryTitle: bestCandidate.title,
+                            year: bestCandidate.year,
+                            type: finalType,
+                            data: r3.data,
+                            ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+                            alias: aliased?.title || null,
+                            pickedFromSearch: { bestScore, best, candidates: searchResults.map(c => `${c.Title} (${c.Year}) ${c.imdbID}`) }
+                        };
+                    }
+                }
+            }
+        } catch {}
+    }
+    
+    // === IMDb Suggest fallback (alternativní/lokalizované názvy) ===
+    const suggestQuery = parsed.clean || parsed.original;
+    const sugg = await imdbSuggest(suggestQuery);
+    
+    if (sugg.length) {
+        // vyber nejlepšího kandidáta
+        let best = null, bestScore = -1;
+        
+        for (const it of sugg.slice(0, 12)) {
+            if (!it?.id?.startsWith('tt')) continue;
+            const title = it.l || '';
+            const y = it.y ? String(it.y) : '';
+            
+            let score = tokenOverlapScore(suggestQuery, title) * 3;
+            if (parsed.year && y && y.includes(String(parsed.year))) score += 8;
+            if (finalType && it.q === 'feature' && finalType === 'movie') score += 1;
+            
+            if (score > bestScore) { bestScore = score; best = it; }
+        }
+        
+        if (best?.id) {
+            console.log(`[IMDB][SUGGEST] query="${suggestQuery}" -> pick="${best.l}" (${best.y || 'N/A'}) ${best.id} score=${bestScore}`);
+            const r4 = await omdbGet(`i=${encodeURIComponent(best.id)}&plot=short`);
+            if (r4.data?.Response === 'True') {
+                console.log(`[IMDB][SUGGEST-HIT] ${best.id} -> "${r4.data.Title}" (${r4.data.Year})`);
+                return {
+                    found: true,
+                    method: 'imdb-suggest->i',
+                    queryTitle: suggestQuery,
+                    year: parsed.year,
+                    type: finalType,
+                    data: r4.data,
+                    ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+                    alias: aliased?.title || null
+                };
+            }
+        }
+    }
+    
+    console.log(`[IMDB][NOTFOUND] raw="${parsed.original}"`);
+    return {
+        found: false,
+        method: 'none',
+        queryTitle: parsed.clean,
+        year: parsed.year,
+        type: finalType,
+        ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+        alias: aliased?.title || null
+    };
 }
 
 function extractYear(raw) {

@@ -646,33 +646,34 @@ async function searchPrehrajto(query) {
  */
 async function getIMDBInfo(title, year = null) {
     try {
-        console.log('🔍 Getting IMDB info for:', title, year);
+        console.log('🔎 [IMDB][REQUEST] title="%s" | year=%s', title, year || 'N/A');
         
         const yearParam = year ? `/${year}` : '';
         const response = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(title)}${yearParam}`);
         const data = await response.json();
         
         if (!response.ok) {
+            console.log('❌ [IMDB][FAIL] status=%d | error="%s"', response.status, data.error || 'unknown');
+            showToast(`IMDB nenalezen pro: ${title}`, 'warning');
             throw new Error(data.error || 'IMDB API chyba');
         }
         
-        if (data.success) {
-            console.log('✅ IMDB data retrieved:', data.data.Title);
-            return data.data;
+        if (data.success && data.data) {
+            const d = data.data;
+            console.log(
+                '✅ [IMDB][SUCCESS] found="%s" (%s) | imdbID=%s | type=%s | genre=%s',
+                d.Title, d.Year, d.imdbID, d.Type, d.Genre || 'N/A'
+            );
+            showToast(`✅ IMDB nalezen: ${d.Title} (${d.Year})`, 'success');
+            return d;
         } else {
+            console.log('❌ [IMDB][FAIL] success=false | title="%s"', title);
+            showToast(`IMDB nenalezen pro: ${title}`, 'warning');
             throw new Error(data.error || 'IMDB data nebyly nalezeny');
         }
     } catch (error) {
-        console.error('IMDB error:', error);
-        showToast(`IMDB chyba: ${error.message}`, 'warning');
-        
-        // Return basic mock data as fallback
-        return {
-            imdbID: 'tt' + Math.random().toString().substring(2, 9),
-            Title: title,
-            Year: year || new Date().getFullYear().toString(),
-            Type: currentMode === 'movie' ? 'movie' : 'series'
-        };
+        console.error('💥 [IMDB][ERROR] title="%s" | error="%s"', title, error.message);
+        return null;
     }
 }
 
@@ -1020,9 +1021,9 @@ async function selectForDownload(moviePath, movieTitle) {
         const filename = generateJellyfinName({ title: movieTitle }, imdbInfo);
         
         // Download subtitles if needed
-        let subtitles = null;
-        if (currentLanguage === 'en' || currentLanguage === 'cz') {
-            subtitles = await downloadSubtitles(movieTitle, imdbInfo?.Year || imdbInfo?.year);
+        let subtitles = [];
+        if (imdbInfo && imdbInfo.Title) {
+            subtitles = await downloadSubtitles(imdbInfo.Title, imdbInfo.Year);
         }
         
         // Start download
