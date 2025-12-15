@@ -1060,11 +1060,8 @@ function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
     const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
-        const year = imdbData?.Year || 'Unknown';
-        const imdbId = imdbData?.imdbID || '';
-        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
-        const movieDir = `${cleanTitle} (${year})${suffix}`;
-        return path.join(baseDir, 'movies', movieDir);
+        // Filmy se ukládají přímo do movies/ bez podsložky
+        return path.join(baseDir, 'movies');
     } else if (type === 'series') {
         const imdbId = imdbData?.imdbID || '';
         const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
@@ -1199,30 +1196,15 @@ app.post('/api/download', async (req, res) => {
                 }
             }
 
-            // metadata
-            const metadataFilename = `${baseFilename}.nfo`;
-            const metadataPath = path.join(downloadDir, metadataFilename);
+            // Pro seriály vytvoř metadata NFO soubor
+            let metadataFilename = null;
+            if (type === 'series') {
+                metadataFilename = `${baseFilename}.nfo`;
+                const metadataPath = path.join(downloadDir, metadataFilename);
 
-            const metadata = type === 'movie'
-                ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<movie>
-  <title>${escapeXml(title)}</title>
-  <originaltitle>${escapeXml(imdbData?.Title || title)}</originaltitle>
-  <year>${imdbData?.Year || ''}</year>
-  <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
-  <runtime>${imdbData?.Runtime || ''}</runtime>
-  <genre>${imdbData?.Genre || ''}</genre>
-  <director>${imdbData?.Director || ''}</director>
-  <actor>${imdbData?.Actors || ''}</actor>
-  <uniqueid type="imdb" default="true">${imdbData?.imdbID || ''}</uniqueid>
-  <id>${imdbData?.imdbID || ''}</id>
-  <imdbid>${imdbData?.imdbID || ''}</imdbid>
-  <rating>${imdbData?.imdbRating || ''}</rating>
-  <poster>${imdbData?.Poster || ''}</poster>
-</movie>`
-                : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                const metadata = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <tvshow>
-  <title>${escapeXml(title)}</title>
+  <title>${escapeXml(imdbData?.Title || title)}</title>
   <year>${imdbData?.Year || ''}</year>
   <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
   <genre>${imdbData?.Genre || ''}</genre>
@@ -1232,8 +1214,10 @@ app.post('/api/download', async (req, res) => {
   <rating>${imdbData?.imdbRating || ''}</rating>
 </tvshow>`;
 
-            fs.writeFileSync(metadataPath, metadata, 'utf8');
-            job.createdFiles.push(metadataPath);
+                fs.writeFileSync(metadataPath, metadata, 'utf8');
+                job.createdFiles.push(metadataPath);
+            }
+            // Pro filmy se NFO nevytváří - Jellyfin používá [imdbid-xxx] v názvu souboru
 
             job.status = 'done';
 
