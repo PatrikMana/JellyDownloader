@@ -185,25 +185,17 @@
         </div>
     </section>
 
-    <!-- Download Progress -->
-    <section class="download-progress" id="download-progress" style="display: none;">
-        <div class="container">
-            <h2 class="step-title">STAHOVÁNÍ</h2>
-            <div class="progress-container">
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progress-fill"></div>
-                </div>
-                <div class="progress-text" id="progress-text">Připravuji stahování...</div>
-            </div>
-            <div class="download-queue" id="download-queue">
-                <!-- Download queue will be populated here -->
-            </div>
-        </div>
-    </div>
+    <!-- Download HUD (bottom-right widget) -->
+    <div id="download-hud" class="download-hud" aria-live="polite"></div>
 
     <!-- Toast Container -->
     <div class="toast-container" id="toast-container"></div>
 
+
     <script src="app.js"></script>
+    
 </body>
+
+ 
+
 </html>

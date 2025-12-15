@@ -72,10 +72,8 @@ function formatSeconds(sec) {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = sec % 60;
-    
-    if (h > 0) return `${h}h ${m}min`;
-    if (m > 0) return `${m}min`;
-    return `${s}s`;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
 }
 
 function ensureHud() {
@@ -106,6 +104,9 @@ function createHudCard(jobId, title) {
           <button class="download-hud-iconbtn danger" data-cancel title="Zrušit a smazat">
             <i class="fas fa-trash"></i>
           </button>
+          <button class="download-hud-iconbtn" data-close title="Skrýt">
+            <i class="fas fa-xmark"></i>
+          </button>
         </div>
       </div>
 
@@ -118,6 +119,11 @@ function createHudCard(jobId, title) {
         <div data-meta>0% • 0 B/s • ETA —</div>
       </div>
     `;
+
+    // close
+    card.querySelector('[data-close]').addEventListener('click', () => {
+        card.remove();
+    });
 
     // cancel
     card.querySelector('[data-cancel]').addEventListener('click', async () => {
@@ -144,12 +150,6 @@ function createHudCard(jobId, title) {
             });
 
             showToast('Stahování zrušeno', 'warning', 3000);
-
-            // Automaticky smaž widget po 5 sekundách s animací
-            setTimeout(() => {
-                card.classList.add('removing');
-                setTimeout(() => card.remove(), 300); // počkej na animaci
-            }, 5000);
         } catch (e) {
             showToast(`Nepodařilo se zrušit: ${e.message}`, 'error', 5000);
         }
@@ -158,6 +158,36 @@ function createHudCard(jobId, title) {
     hud.prepend(card);
     return card;
 }
+
+card.querySelector('[data-cancel]').addEventListener('click', async () => {
+    try {
+        updateHudCard(jobId, {
+            statusText: 'RUŠÍM',
+            statusKind: 'err',
+            subText: 'Odesílám požadavek na zrušení…',
+            metaText: '—'
+        });
+
+        const r = await fetch(`${API_CONFIG.prehrajto}/download/cancel/${encodeURIComponent(jobId)}`, {
+            method: 'POST'
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.success) throw new Error(j.error || 'Cancel selhal');
+
+        // finální stav přijde i přes SSE, ale ať je UI hned “živé”
+        updateHudCard(jobId, {
+            statusText: 'ZRUŠENO',
+            statusKind: 'err',
+            subText: 'Stahování zrušeno, soubory smazány.',
+            metaText: ''
+        });
+
+        showToast('Stahování zrušeno', 'warning', 3000);
+    } catch (e) {
+        showToast(`Nepodařilo se zrušit: ${e.message}`, 'error', 5000);
+    }
+});
 
 function updateHudCard(jobId, patch) {
     const card = document.querySelector(`.download-hud-card[data-job-id="${jobId}"]`);
@@ -646,34 +676,33 @@ async function searchPrehrajto(query) {
  */
 async function getIMDBInfo(title, year = null) {
     try {
-        console.log('🔎 [IMDB][REQUEST] title="%s" | year=%s', title, year || 'N/A');
+        console.log('🔍 Getting IMDB info for:', title, year);
         
         const yearParam = year ? `/${year}` : '';
         const response = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(title)}${yearParam}`);
         const data = await response.json();
         
         if (!response.ok) {
-            console.log('❌ [IMDB][FAIL] status=%d | error="%s"', response.status, data.error || 'unknown');
-            showToast(`IMDB nenalezen pro: ${title}`, 'warning');
             throw new Error(data.error || 'IMDB API chyba');
         }
         
-        if (data.success && data.data) {
-            const d = data.data;
-            console.log(
-                '✅ [IMDB][SUCCESS] found="%s" (%s) | imdbID=%s | type=%s | genre=%s',
-                d.Title, d.Year, d.imdbID, d.Type, d.Genre || 'N/A'
-            );
-            showToast(`✅ IMDB nalezen: ${d.Title} (${d.Year})`, 'success');
-            return d;
+        if (data.success) {
+            console.log('✅ IMDB data retrieved:', data.data.Title);
+            return data.data;
         } else {
-            console.log('❌ [IMDB][FAIL] success=false | title="%s"', title);
-            showToast(`IMDB nenalezen pro: ${title}`, 'warning');
             throw new Error(data.error || 'IMDB data nebyly nalezeny');
         }
     } catch (error) {
-        console.error('💥 [IMDB][ERROR] title="%s" | error="%s"', title, error.message);
-        return null;
+        console.error('IMDB error:', error);
+        showToast(`IMDB chyba: ${error.message}`, 'warning');
+        
+        // Return basic mock data as fallback
+        return {
+            imdbID: 'tt' + Math.random().toString().substring(2, 9),
+            Title: title,
+            Year: year || new Date().getFullYear().toString(),
+            Type: currentMode === 'movie' ? 'movie' : 'series'
+        };
     }
 }
 
@@ -1021,9 +1050,9 @@ async function selectForDownload(moviePath, movieTitle) {
         const filename = generateJellyfinName({ title: movieTitle }, imdbInfo);
         
         // Download subtitles if needed
-        let subtitles = [];
-        if (imdbInfo && imdbInfo.Title) {
-            subtitles = await downloadSubtitles(imdbInfo.Title, imdbInfo.Year);
+        let subtitles = null;
+        if (currentLanguage === 'en' || currentLanguage === 'cz') {
+            subtitles = await downloadSubtitles(movieTitle, imdbInfo?.Year || imdbInfo?.year);
         }
         
         // Start download
@@ -1074,7 +1103,7 @@ async function startDownload(item) {
         const downloadData = {
             videoUrl: item.url,
             title: item.title,
-            imdbData: imdbData || null,  // ✅ použij to co ses opravdu dotáhl
+            imdbData: item.imdbInfo || null,
             type: currentMode,
             subtitles: item.subtitles || [],
             season: item.season || null,
@@ -1122,7 +1151,7 @@ async function startDownload(item) {
                     subText: `${formatBytes(data.downloadedBytes)} / ${data.totalBytes ? formatBytes(data.totalBytes) : '—'}`,
                     statusText: 'STAHUJU',
                     statusKind: '',
-                    metaText: `${Math.round(pct)}% • ${formatBytes(speed)}/s • ${formatSeconds(eta)}`
+                    metaText: `${Math.round(pct)}% • ${formatBytes(speed)}/s • ETA ${formatSeconds(eta)}`
                 });
             }
 

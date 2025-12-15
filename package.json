@@ -10,17 +10,23 @@
     "start:all": "concurrently \"npm run dev\" \"npm run client\""
   },
   "dependencies": {
-    "express": "^4.18.2",
     "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
     "path": "^0.12.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
     "concurrently": "^8.2.2"
   },
-  "keywords": ["prehrajto", "downloader", "scraper", "video"],
-  "author": "Patrik",
+  "keywords": [
+    "prehrajto",
+    "downloader",
+    "scraper",
+    "video"
+  ],
+  "author": "Patrik & Jakub; JPMP production",
   "license": "MIT"
 }
