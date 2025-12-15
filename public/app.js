@@ -746,7 +746,9 @@ async function downloadSubtitles(title, year) {
  * Generate Jellyfin-compatible filename
  */
 function generateJellyfinName(item, imdbInfo) {
-    const cleanTitle = (item.title || 'Unknown').replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbInfo?.Title || item.title || 'Unknown';
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (currentMode === 'movie') {
         // Movies: Movie Title (Year) [imdbid-ttXXXXXXX]

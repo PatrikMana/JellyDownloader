@@ -1024,8 +1024,10 @@ function removeEmptyDirsUp(startDir, stopAtDir) {
 
 // Helper function to generate Jellyfin-compatible filename
 function generateJellyfinFilename(title, imdbData, type = 'movie', season = null, episode = null) {
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbData?.Title || title || 'Unknown';
     // Clean title (remove invalid filename characters)
-    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
         // Movies: Movie Title (Year) [imdbid-ttXXXXXXX]
@@ -1053,7 +1055,9 @@ function generateJellyfinFilename(title, imdbData, type = 'movie', season = null
 // Helper function to get Jellyfin directory structure
 function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
     const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
-    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbData?.Title || title || 'Unknown';
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
         const year = imdbData?.Year || 'Unknown';
