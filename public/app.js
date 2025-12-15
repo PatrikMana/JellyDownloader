@@ -12,6 +12,7 @@ let currentLanguage = 'cz';
 let searchResults = [];
 let selectedItems = [];
 let downloadQueue = [];
+let lastSearchQuery = ''; // Uchová poslední hledaný výraz od uživatele
 
 // API Configuration
 const API_CONFIG = {
@@ -643,13 +644,18 @@ async function searchPrehrajto(query) {
 
 /**
  * Get IMDB information
+ * @param {string} title - Název filmu z výsledků Prehrajto
+ * @param {string|null} year - Rok filmu
+ * @param {string|null} originalQuery - Původní vyhledávací dotaz od uživatele (prioritní pro IMDB)
  */
-async function getIMDBInfo(title, year = null) {
+async function getIMDBInfo(title, year = null, originalQuery = null) {
     try {
-        console.log('🔎 [IMDB][REQUEST] title="%s" | year=%s', title, year || 'N/A');
+        console.log('🔎 [IMDB][REQUEST] title="%s" | year=%s | originalQuery="%s"', title, year || 'N/A', originalQuery || 'N/A');
         
         const yearParam = year ? `/${year}` : '';
-        const response = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(title)}${yearParam}`);
+        // Přidáme originalQuery jako query parametr, pokud existuje
+        const queryParam = originalQuery ? `?originalQuery=${encodeURIComponent(originalQuery)}` : '';
+        const response = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(title)}${yearParam}${queryParam}`);
         const data = await response.json();
         
         if (!response.ok) {
@@ -1011,8 +1017,8 @@ async function previewVideo(moviePath, movieTitle) {
  */
 async function selectForDownload(moviePath, movieTitle) {
     try {
-        // Get IMDB info
-        const imdbInfo = await getIMDBInfo(movieTitle);
+        // Get IMDB info - předáme i původní hledaný výraz pro lepší shodu
+        const imdbInfo = await getIMDBInfo(movieTitle, null, lastSearchQuery);
         
         // Get video URL
         const videoUrl = await getVideoUrl(moviePath);
@@ -1059,7 +1065,9 @@ async function startDownload(item) {
                 const searchTitle = titleMatch ? titleMatch[1] : item.title;
                 const year = titleMatch ? titleMatch[2] : null;
                 
-                const imdbResponse = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(searchTitle)}${year ? `/${year}` : ''}`);
+                // Přidáme originalQuery pokud existuje
+                const queryParam = lastSearchQuery ? `?originalQuery=${encodeURIComponent(lastSearchQuery)}` : '';
+                const imdbResponse = await fetch(`${API_CONFIG.prehrajto}/imdb/${encodeURIComponent(searchTitle)}${year ? `/${year}` : ''}${queryParam}`);
                 const imdbResult = await imdbResponse.json();
                 
                 if (imdbResult.success) {
@@ -1330,6 +1338,9 @@ document.addEventListener('DOMContentLoaded', function() {
             showToast('Zadejte název filmu', 'warning');
             return;
         }
+        
+        // Uložit původní hledaný výraz pro IMDB lookup
+        lastSearchQuery = query;
         
         const languageText = currentLanguage === 'en' ? 'anglickém' : 'českém';
         showToast(`Vyhledávám filmy v ${languageText} jazyce...`, 'info');
