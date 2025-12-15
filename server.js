@@ -262,6 +262,7 @@ app.get('/api/imdb/:title/:year?', async (req, res) => {
     try {
         const rawTitle = req.params.title;
         const yearParam = req.params.year || null;
+        const originalQuery = req.query.originalQuery || null; // Původní hledaný výraz od uživatele
         
         if (OMDB_API_KEY === 'your-api-key-here') {
             // Mock IMDB data for development
@@ -282,7 +283,25 @@ app.get('/api/imdb/:title/:year?', async (req, res) => {
             return res.json({ success: true, data: mockData });
         }
         
-        // Zavolej advanced resolver
+        // === NOVÝ PŘÍSTUP: Nejprve zkusíme originalQuery (bez regexu) ===
+        if (originalQuery && originalQuery.trim()) {
+            console.log(`[IMDB][STEP1] Zkouším původní query uživatele: "${originalQuery}"`);
+            const queryResult = await resolveImdbSimple(originalQuery.trim(), yearParam);
+            
+            if (queryResult.found) {
+                const d = queryResult.data;
+                console.log(
+                    `[IMDB][FOUND-QUERY] originalQuery="${originalQuery}" | ` +
+                    `-> "${d.Title}" (${d.Year}) ${d.imdbID}`
+                );
+                return res.json({ success: true, data: queryResult.data });
+            } else {
+                console.log(`[IMDB][STEP1-MISS] Původní query "${originalQuery}" nenašlo nic, pokračuji s názvem z Prehrajto...`);
+            }
+        }
+        
+        // === FALLBACK: Použij rawTitle s regex čištěním ===
+        console.log(`[IMDB][STEP2] Zkouším název z Prehrajto s regex: "${rawTitle}"`);
         const result = await resolveImdb(rawTitle, yearParam);
         
         // Logování do Node konzole
@@ -742,6 +761,95 @@ async function imdbSuggest(query) {
     }
 }
 
+/**
+ * Jednoduchý IMDB resolver - bez regex čištění
+ * Použije se pro původní hledaný výraz od uživatele
+ * Strategie: t= exact match -> s= search -> imdb suggest
+ */
+async function resolveImdbSimple(query, yearHint = null, typeHint = 'movie') {
+    const cleanQuery = stripDiacritics(String(query || '').trim());
+    if (!cleanQuery) return { found: false };
+    
+    // Extrakce roku z query (pokud je přítomen)
+    const yearMatch = cleanQuery.match(/\b(19\d{2}|20\d{2})\b/);
+    const year = yearHint || (yearMatch ? yearMatch[1] : null);
+    
+    // Odstranění roku z query pro čistší hledání
+    const titleWithoutYear = cleanQuery.replace(/\s*\b(19\d{2}|20\d{2})\b\s*/g, ' ').trim();
+    
+    console.log(`[IMDB-SIMPLE] query="${cleanQuery}" | titleWithoutYear="${titleWithoutYear}" | year=${year || 'N/A'}`);
+    
+    // 1) Zkus t= exact match (nejrychlejší a nejpřesnější)
+    const params = `t=${encodeURIComponent(titleWithoutYear)}${year ? `&y=${year}` : ''}&type=${typeHint}`;
+    try {
+        const r = await omdbGet(params);
+        if (r.data?.Response === 'True') {
+            console.log(`[IMDB-SIMPLE][HIT-T] "${titleWithoutYear}" -> "${r.data.Title}" (${r.data.Year}) ${r.data.imdbID}`);
+            return { found: true, data: r.data, method: 't-simple' };
+        }
+    } catch (err) {
+        console.log(`[IMDB-SIMPLE][ERROR-T] ${err.message}`);
+    }
+    
+    // 2) Zkus s= search fallback
+    const sParams = `s=${encodeURIComponent(titleWithoutYear)}&type=${typeHint}`;
+    try {
+        const r2 = await omdbGet(sParams);
+        if (r2.data?.Response === 'True' && Array.isArray(r2.data.Search)) {
+            const searchResults = r2.data.Search.slice(0, 8);
+            
+            // Najdi nejlepší shodu podle skóre
+            let best = null;
+            let bestScore = -1;
+            
+            for (const sr of searchResults) {
+                let score = 0;
+                score += tokenOverlapScore(titleWithoutYear, sr.Title) * 2;
+                if (year && sr.Year && String(sr.Year).includes(String(year))) score += 5;
+                if (typeHint && sr.Type === typeHint) score += 1;
+                if (score > bestScore) { bestScore = score; best = sr; }
+            }
+            
+            if (best?.imdbID && bestScore >= 2) { // Minimální skóre pro přijetí
+                const r3 = await omdbGet(`i=${encodeURIComponent(best.imdbID)}&plot=short`);
+                if (r3.data?.Response === 'True') {
+                    console.log(`[IMDB-SIMPLE][HIT-S] "${titleWithoutYear}" -> "${r3.data.Title}" (${r3.data.Year}) ${r3.data.imdbID} score=${bestScore}`);
+                    return { found: true, data: r3.data, method: 's-simple' };
+                }
+            }
+        }
+    } catch {}
+    
+    // 3) IMDb Suggest API jako poslední možnost
+    const sugg = await imdbSuggest(titleWithoutYear);
+    if (sugg.length) {
+        let best = null, bestScore = -1;
+        
+        for (const it of sugg.slice(0, 8)) {
+            if (!it?.id?.startsWith('tt')) continue;
+            const title = it.l || '';
+            const y = it.y ? String(it.y) : '';
+            
+            let score = tokenOverlapScore(titleWithoutYear, title) * 3;
+            if (year && y && y.includes(String(year))) score += 8;
+            if (typeHint === 'movie' && it.q === 'feature') score += 1;
+            
+            if (score > bestScore) { bestScore = score; best = it; }
+        }
+        
+        if (best?.id && bestScore >= 3) { // Minimální skóre pro přijetí
+            const r4 = await omdbGet(`i=${encodeURIComponent(best.id)}&plot=short`);
+            if (r4.data?.Response === 'True') {
+                console.log(`[IMDB-SIMPLE][HIT-SUGGEST] "${titleWithoutYear}" -> "${r4.data.Title}" (${r4.data.Year}) ${r4.data.imdbID} score=${bestScore}`);
+                return { found: true, data: r4.data, method: 'suggest-simple' };
+            }
+        }
+    }
+    
+    console.log(`[IMDB-SIMPLE][NOTFOUND] "${cleanQuery}"`);
+    return { found: false };
+}
+
 async function resolveImdb(rawTitle, yearHint = null, typeHint = null) {
     // Build candidates with new pipeline
     const { parsed, candidates } = buildOmdbCandidates(rawTitle);
@@ -916,8 +1024,10 @@ function removeEmptyDirsUp(startDir, stopAtDir) {
 
 // Helper function to generate Jellyfin-compatible filename
 function generateJellyfinFilename(title, imdbData, type = 'movie', season = null, episode = null) {
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbData?.Title || title || 'Unknown';
     // Clean title (remove invalid filename characters)
-    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
         // Movies: Movie Title (Year) [imdbid-ttXXXXXXX]
@@ -945,14 +1055,13 @@ function generateJellyfinFilename(title, imdbData, type = 'movie', season = null
 // Helper function to get Jellyfin directory structure
 function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
     const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
-    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbData?.Title || title || 'Unknown';
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
-        const year = imdbData?.Year || 'Unknown';
-        const imdbId = imdbData?.imdbID || '';
-        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
-        const movieDir = `${cleanTitle} (${year})${suffix}`;
-        return path.join(baseDir, 'movies', movieDir);
+        // Filmy se ukládají přímo do movies/ bez podsložky
+        return path.join(baseDir, 'movies');
     } else if (type === 'series') {
         const imdbId = imdbData?.imdbID || '';
         const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
@@ -1087,30 +1196,15 @@ app.post('/api/download', async (req, res) => {
                 }
             }
 
-            // metadata
-            const metadataFilename = `${baseFilename}.nfo`;
-            const metadataPath = path.join(downloadDir, metadataFilename);
+            // Pro seriály vytvoř metadata NFO soubor
+            let metadataFilename = null;
+            if (type === 'series') {
+                metadataFilename = `${baseFilename}.nfo`;
+                const metadataPath = path.join(downloadDir, metadataFilename);
 
-            const metadata = type === 'movie'
-                ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<movie>
-  <title>${escapeXml(title)}</title>
-  <originaltitle>${escapeXml(imdbData?.Title || title)}</originaltitle>
-  <year>${imdbData?.Year || ''}</year>
-  <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
-  <runtime>${imdbData?.Runtime || ''}</runtime>
-  <genre>${imdbData?.Genre || ''}</genre>
-  <director>${imdbData?.Director || ''}</director>
-  <actor>${imdbData?.Actors || ''}</actor>
-  <uniqueid type="imdb" default="true">${imdbData?.imdbID || ''}</uniqueid>
-  <id>${imdbData?.imdbID || ''}</id>
-  <imdbid>${imdbData?.imdbID || ''}</imdbid>
-  <rating>${imdbData?.imdbRating || ''}</rating>
-  <poster>${imdbData?.Poster || ''}</poster>
-</movie>`
-                : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                const metadata = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <tvshow>
-  <title>${escapeXml(title)}</title>
+  <title>${escapeXml(imdbData?.Title || title)}</title>
   <year>${imdbData?.Year || ''}</year>
   <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
   <genre>${imdbData?.Genre || ''}</genre>
@@ -1120,8 +1214,10 @@ app.post('/api/download', async (req, res) => {
   <rating>${imdbData?.imdbRating || ''}</rating>
 </tvshow>`;
 
-            fs.writeFileSync(metadataPath, metadata, 'utf8');
-            job.createdFiles.push(metadataPath);
+                fs.writeFileSync(metadataPath, metadata, 'utf8');
+                job.createdFiles.push(metadataPath);
+            }
+            // Pro filmy se NFO nevytváří - Jellyfin používá [imdbid-xxx] v názvu souboru
 
             job.status = 'done';
 

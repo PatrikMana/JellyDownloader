@@ -155,4 +155,4 @@ OMDB_API_KEY=your-api-key        # OMDB API klíč (volitelné, default: mock mo
 
 6. Batch stahování více filmů najednou - TODO
 
-7. WebSocket progress updates pro real-time progress - TODO
+7. WebSocket progress updates pro real-time progress ✅ HOTOVO
