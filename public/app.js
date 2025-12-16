@@ -684,23 +684,35 @@ async function getIMDBInfo(title, year = null, originalQuery = null) {
 }
 
 /**
- * Get video URL from prehrajto.cz
+ * Get video data from prehrajto.cz (URL + all available qualities)
  */
-async function getVideoUrl(moviePath) {
+async function getVideoData(moviePath) {
     try {
         const cleanPath = moviePath.startsWith('/') ? moviePath.substring(1) : moviePath;
         const response = await fetch(`${API_CONFIG.prehrajto}/video/${cleanPath}`);
         const data = await response.json();
         
         if (data.success && data.videoUrl) {
-            return data.videoUrl;
+            return {
+                videoUrl: data.videoUrl,
+                qualities: data.qualities || [{ src: data.videoUrl, res: 0, label: 'Default' }],
+                maxResolution: data.maxResolution || null
+            };
         } else {
             throw new Error(data.error || 'Video URL nebylo nalezeno');
         }
     } catch (error) {
-        console.error('Video URL error:', error);
+        console.error('Video data error:', error);
         throw error;
     }
+}
+
+/**
+ * Get video URL from prehrajto.cz (backwards compatibility)
+ */
+async function getVideoUrl(moviePath) {
+    const data = await getVideoData(moviePath);
+    return data.videoUrl;
 }
 
 /**
@@ -934,16 +946,18 @@ function displayResults(results) {
  * Generate quality badge
  */
 function getQualityBadge(title) {
-    const patterns = {
-        '4K': /4k|2160p|uhd/i,
-        '1080p': /1080p|full.*hd|fhd/i,
-        '720p': /720p|hd(?!.*1080)/i,
-        '480p': /480p|sd|dvd/i
-    };
+    const patterns = [
+        { quality: '8K', pattern: /8k|4320p/i, color: 'var(--color-glitch-magenta)' },
+        { quality: '4K', pattern: /4k|2160p|uhd/i, color: 'var(--color-glitch-cyan)' },
+        { quality: '1080p', pattern: /1080p|full.*hd|fhd/i, color: 'var(--color-glitch-green)' },
+        { quality: '720p', pattern: /720p|hd(?!.*1080)/i, color: 'var(--color-glitch-cyan)' },
+        { quality: '480p', pattern: /480p|sd|dvd/i, color: 'var(--color-text-secondary)' }
+    ];
     
-    for (const [quality, pattern] of Object.entries(patterns)) {
+    // Najdi nejvyšší kvalitu (první match)
+    for (const { quality, pattern, color } of patterns) {
         if (pattern.test(title)) {
-            return `<span class="result-badge" style="border-color: var(--color-glitch-cyan);">${quality}</span>`;
+            return `<span class="result-badge" style="border-color: ${color};">${quality}</span>`;
         }
     }
     return '';
@@ -995,15 +1009,123 @@ function getLanguageBadge(title) {
 // ===============================================
 
 /**
+ * Show quality selector modal
+ * @returns {Promise<string>} Selected quality URL
+ */
+async function showQualitySelector(qualities, movieTitle) {
+    return new Promise((resolve, reject) => {
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'quality-modal-overlay';
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.className = 'quality-modal';
+        
+        // Header
+        const header = document.createElement('div');
+        header.className = 'quality-modal-header';
+        header.innerHTML = `
+            <h2><i class="fas fa-cog"></i> VÝBĚR KVALITY</h2>
+            <button class="quality-modal-close">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        
+        // Body
+        const body = document.createElement('div');
+        body.className = 'quality-modal-body';
+        
+        // Sort qualities from highest to lowest
+        const sortedQualities = [...qualities].sort((a, b) => b.res - a.res);
+        
+        // Generate quality options
+        sortedQualities.forEach((quality, index) => {
+            const option = document.createElement('div');
+            option.className = 'quality-option';
+            if (index === 0) option.classList.add('recommended'); // First = highest quality
+            
+            option.innerHTML = `
+                <div class="quality-label">
+                    <div class="quality-resolution">${quality.label}</div>
+                    <div class="quality-description">
+                        ${getQualityDescription(quality.res)}
+                    </div>
+                </div>
+            `;
+            
+            option.addEventListener('click', () => {
+                overlay.remove();
+                resolve(quality.src);
+            });
+            
+            body.appendChild(option);
+        });
+        
+        // Assemble modal
+        modal.appendChild(header);
+        modal.appendChild(body);
+        overlay.appendChild(modal);
+        
+        // Close button
+        header.querySelector('.quality-modal-close').addEventListener('click', () => {
+            overlay.remove();
+            reject(new Error('Výběr kvality zrušen'));
+        });
+        
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+                reject(new Error('Výběr kvality zrušen'));
+            }
+        });
+        
+        // Add to DOM
+        document.body.appendChild(overlay);
+    });
+}
+
+/**
+ * Get quality description
+ */
+function getQualityDescription(resolution) {
+    if (resolution >= 2160) return '4K Ultra HD - Nejvyšší kvalita';
+    if (resolution >= 1080) return 'Full HD - Vysoká kvalita';
+    if (resolution >= 720) return 'HD - Dobrá kvalita';
+    if (resolution >= 480) return 'SD - Standardní kvalita';
+    return 'Neznámá kvalita';
+}
+
+/**
  * Preview video quality
  */
 async function previewVideo(moviePath, movieTitle) {
     try {
-        const videoUrl = await getVideoUrl(moviePath);
-        window.open(videoUrl, '_blank');
+        // Show loading toast
+        showToast('Načítám dostupné kvality...', 'info');
         
-        showToast(`Video otevřeno: ${movieTitle}`, 'success');
+        // Get video data FIRST
+        const videoData = await getVideoData(moviePath);
+        
+        // Always show selector (even for single quality for testing)
+        console.log('🎬 Video data received:', videoData);
+        
+        if (videoData.qualities && videoData.qualities.length > 0) {
+            const selectedUrl = await showQualitySelector(videoData.qualities, movieTitle);
+            window.open(selectedUrl, '_blank');
+            showToast(`Video otevřeno: ${movieTitle}`, 'success');
+        } else {
+            console.error('❌ No qualities found in videoData:', videoData);
+            window.open(videoData.videoUrl, '_blank');
+            showToast(`Video otevřeno (fallback): ${movieTitle}`, 'success');
+        }
     } catch (error) {
+        if (error.message === 'Výběr kvality zrušen') {
+            showToast('Náhled zrušen', 'info');
+            return;
+        }
+        
         console.error('Preview error:', error);
         showToast(`Chyba při otevírání videa: ${error.message}`, 'error');
         
@@ -1019,11 +1141,32 @@ async function previewVideo(moviePath, movieTitle) {
  */
 async function selectForDownload(moviePath, movieTitle) {
     try {
-        // Get IMDB info - předáme i původní hledaný výraz pro lepší shodu
-        const imdbInfo = await getIMDBInfo(movieTitle, null, lastSearchQuery);
+        // KROK 1: Načti kvality a HNED zobraz selector
+        showToast('Načítám dostupné kvality...', 'info');
+        const videoData = await getVideoData(moviePath);
         
-        // Get video URL
-        const videoUrl = await getVideoUrl(moviePath);
+        // KROK 2: Zobraz modal pro výběr kvality (vždy, i pro debug)
+        console.log('📥 Video data for download:', videoData);
+        
+        let selectedUrl = videoData.videoUrl; // default to highest quality
+        if (videoData.qualities && videoData.qualities.length > 0) {
+            try {
+                selectedUrl = await showQualitySelector(videoData.qualities, movieTitle);
+            } catch (selectError) {
+                if (selectError.message === 'Výběr kvality zrušen') {
+                    showToast('Stahování zrušeno', 'info');
+                    return;
+                }
+                throw selectError;
+            }
+        } else {
+            console.error('❌ No qualities available for download:', videoData);
+            showToast('⚠️ Žádné kvality nenalezeny, použiji fallback URL', 'warning');
+        }
+        
+        // KROK 3: Teď až získej IMDB info a ostatní metadata
+        showToast('Získávám metadata z IMDB...', 'info');
+        const imdbInfo = await getIMDBInfo(movieTitle, null, lastSearchQuery);
         
         // Generate filename
         const filename = generateJellyfinName({ title: movieTitle }, imdbInfo);
@@ -1034,10 +1177,10 @@ async function selectForDownload(moviePath, movieTitle) {
             subtitles = await downloadSubtitles(imdbInfo.Title, imdbInfo.Year);
         }
         
-        // Start download
+        // Start download with selected quality
         await startDownload({
             title: movieTitle,
-            url: videoUrl,
+            url: selectedUrl,
             filename: filename,
             imdbInfo: imdbInfo,
             subtitles: subtitles,

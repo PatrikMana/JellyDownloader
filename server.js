@@ -207,6 +207,8 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
       res.json({
         success: true,
         videoUrl: videoUrl,
+        qualities: [{ src: videoUrl, res: 0, label: 'Default' }],
+        maxResolution: null,
         moviePath: moviePath,
         method: 'alternative'
       });
@@ -216,21 +218,145 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
     const jsSection = html.substring(sourcesStart, tracksStart);
     console.log('🔍 JavaScript sekce:', jsSection.substring(0, 200) + '...');
     
-    // Extrakce video URL pomocí regex - vylepšené
-    const urlPatterns = [
-      /"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g,
-      /'([^']*\.(mp4|mkv|avi|webm)[^']*)'/g,
-      /file\s*:\s*"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g
-    ];
-    
+    // Parse sources array podle tvého skriptu
+    let qualities = [];
     let videoUrl = null;
-    for (const pattern of urlPatterns) {
-      const matches = jsSection.match(pattern);
-      if (matches && matches.length > 0) {
-        videoUrl = matches[0].replace(/['"]/g, '');
-        if (videoUrl.startsWith('http')) {
-          console.log(`✅ Video URL nalezena vzorem: ${videoUrl}`);
-          break;
+    let maxResolution = 0;
+    
+    try {
+      console.log('📦 Parsing sources using browser-like logic...');
+      
+      // Extrahi celý sources = [...] block
+      const sourcesMatch = jsSection.match(/var\s+sources\s*=\s*(\[[\s\S]*?\]);/);
+      
+      if (sourcesMatch) {
+        const sourcesArrayText = sourcesMatch[1];
+        console.log('🔍 Found sources array, length:', sourcesArrayText.length);
+        
+        try {
+          // Bezpečnější parsing - použij Function constructor místo eval
+          const sourcesArray = new Function('return ' + sourcesArrayText)();
+          
+          if (Array.isArray(sourcesArray) && sourcesArray.length > 0) {
+            console.log(`📋 Sources array has ${sourcesArray.length} items`);
+            
+            // Simulate your script logic: sources.videos.map((item) => ...)
+            // But prehrajto uses sources directly as array of video objects
+            const foundQualities = [];
+            
+            sourcesArray.forEach((item, index) => {
+              if (item.file || item.src) {
+                const src = item.file || item.src;
+                
+                console.log(`📹 Video ${index}: checking item:`, { 
+                  hasRes: !!item.res, 
+                  hasQuality: !!item.quality,
+                  hasSize: !!item.size,
+                  urlLength: src.length
+                });
+                
+                // Zkus získat res z objektu
+                let res = 0;
+                let label = `Video ${index + 1}`;
+                
+                if (item.res) {
+                  res = parseInt(item.res);
+                  label = `${res}p`;
+                  console.log(`  ✅ Found explicit res: ${res}p`);
+                } else if (item.quality) {
+                  // Někdy je quality místo res
+                  if (item.quality.includes('1080')) res = 1080;
+                  else if (item.quality.includes('720')) res = 720;
+                  else if (item.quality.includes('480')) res = 480;
+                  label = item.quality;
+                  console.log(`  ✅ Found quality property: ${label}`);
+                } else {
+                  // Lepší heuristika - zkus více indikátorů
+                  console.log(`  🔍 Using heuristics for quality detection...`);
+                  
+                  // 1) Hledej pattern v URL (např. "720p", "1080p")
+                  const urlQualityMatch = src.match(/(\d{3,4})p/i);
+                  if (urlQualityMatch) {
+                    res = parseInt(urlQualityMatch[1]);
+                    label = `${res}p`;
+                    console.log(`    📍 URL pattern: ${label}`);
+                  }
+                  // 2) Hledej keywords v URL
+                  else if (src.includes('1080') || src.includes('fullhd') || src.includes('fhd')) {
+                    res = 1080;
+                    label = '1080p';
+                    console.log(`    📍 URL keyword: 1080p`);
+                  }
+                  else if (src.includes('720') || src.includes('hd')) {
+                    res = 720;
+                    label = '720p';
+                    console.log(`    📍 URL keyword: 720p`);
+                  }
+                  // 3) Fallback: rozliš podle indexu (první = horší, poslední = lepší)
+                  else {
+                    // V prehrajto.cz je obvykle první video HORŠÍ kvalita, druhé LEPŠÍ
+                    if (index === 0) {
+                      res = 720;   // První = 720p
+                      label = '720p';
+                      console.log(`    📍 Index fallback: 720p (first video)`);
+                    } else {
+                      res = 1080;  // Druhý/další = 1080p
+                      label = '1080p';
+                      console.log(`    📍 Index fallback: 1080p (later video)`);
+                    }
+                  }
+                }
+                
+                foundQualities.push({
+                  src: src,
+                  res: res,
+                  label: label,
+                  index: index
+                });
+                
+                console.log(`  💾 Added: ${label} (${res}p)`);
+              }
+            });
+            
+            // Seřaď podle rozlišení (nejvyšší první)
+            qualities = foundQualities
+              .filter(q => q.src && q.src.startsWith('http'))
+              .sort((a, b) => b.res - a.res);
+              
+            if (qualities.length > 0) {
+              console.log(`✅ Nalezeno ${qualities.length} kvalit:`, qualities.map(q => `${q.label}(${q.res})`).join(', '));
+              videoUrl = qualities[0].src;
+              maxResolution = qualities[0].res;
+            }
+          }
+        } catch (evalError) {
+          console.warn('⚠️ Nepodařilo se parsovat sources array:', evalError.message);
+        }
+      }
+      
+      if (qualities.length === 0) {
+        console.log('⚠️ Žádné kvality nenalezeny, zkusím fallback...');
+      }
+    } catch (parseError) {
+      console.warn('⚠️ Nepodařilo se parsovat sources:', parseError.message);
+    }
+    
+    // Fallback: použij regex na extrakci první URL
+    if (!videoUrl) {
+      const urlPatterns = [
+        /"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g,
+        /'([^']*\.(mp4|mkv|avi|webm)[^']*)'/g,
+        /file\s*:\s*"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g
+      ];
+      
+      for (const pattern of urlPatterns) {
+        const matches = jsSection.match(pattern);
+        if (matches && matches.length > 0) {
+          videoUrl = matches[0].replace(/['"]/g, '');
+          if (videoUrl.startsWith('http')) {
+            console.log(`✅ Video URL nalezena vzorem (fallback): ${videoUrl}`);
+            break;
+          }
         }
       }
     }
@@ -239,9 +365,20 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
       throw new Error('Video URL nebyla nalezena v JavaScript kódu nebo není validní HTTP URL');
     }
     
+    // Pokud jsme nenašli žádné kvality, vytvoř alespoň jednu
+    if (qualities.length === 0) {
+      qualities.push({
+        src: videoUrl,
+        res: 0,
+        label: 'Default'
+      });
+    }
+    
     res.json({
       success: true,
-      videoUrl: videoUrl,
+      videoUrl: videoUrl,  // nejvyšší kvalita jako default
+      qualities: qualities,
+      maxResolution: maxResolution || null,
       moviePath: moviePath,
       method: 'standard'
     });
