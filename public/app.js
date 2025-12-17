@@ -531,34 +531,351 @@ function displaySeriesSearchResults(results) {
 }
 
 /**
- * Select a series and show seasons
+ * Select a series and show seasons with episodes tree
  */
 async function selectSeries(imdbId, seriesTitle) {
     try {
-        showToast('Načítám sezóny...', 'info');
+        showToast('Načítám sezóny a díly...', 'info');
         
-        const seriesData = await getSeriesDetails(imdbId);
-        if (!seriesData) return;
+        // Hide series cards (search results)
+        const seriesInfo = document.getElementById('series-info');
+        if (seriesInfo) {
+            seriesInfo.style.display = 'none';
+        }
+        
+        // Show the series selection section
+        const selectionSection = document.getElementById('series-selection');
+        if (selectionSection) {
+            selectionSection.style.display = 'block';
+        }
+        
+        // Show loading in seasons container
+        const container = document.getElementById('seasons-grid');
+        container.style.display = 'block';
+        container.innerHTML = `
+            <div class="series-tree-loading">
+                <i class="fas fa-spinner"></i>
+                <p>Načítám sezóny a díly z IMDB...</p>
+            </div>
+        `;
+        
+        // Scroll to the selection section
+        selectionSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // Fetch all seasons with episodes
+        const response = await fetch(`${API_CONFIG.prehrajto}/imdb/series/${imdbId}/seasons`);
+        const data = await response.json();
+        
+        console.log('📺 Seasons API response:', data);
+        
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Nepodařilo se načíst sezóny');
+        }
         
         // Store selected series data
         window.selectedSeries = {
             imdbId: imdbId,
-            title: seriesTitle,
-            data: seriesData
+            title: seriesTitle || data.seriesTitle,
+            seasons: data.seasons
         };
         
-        displaySeasons(seriesData);
+        console.log('📺 Calling displaySeasonsTree with:', data.seasons.length, 'seasons');
+        displaySeasonsTree(data.seasons, seriesTitle || data.seriesTitle);
+        showToast(`Načteno ${data.seasons.length} sezón`, 'success');
         
     } catch (error) {
         console.error('Error selecting series:', error);
-        showToast('Chyba při načítání sezón', 'error');
+        showToast('Chyba při načítání sezón: ' + error.message, 'error');
     }
 }
 
 /**
- * Display seasons for selection
+ * Display seasons and episodes in tree structure with checkboxes
+ */
+function displaySeasonsTree(seasons, seriesTitle) {
+    console.log('📺 displaySeasonsTree called with:', seasons, seriesTitle);
+    
+    const container = document.getElementById('seasons-grid');
+    console.log('📺 Container found:', container);
+    
+    if (!container) {
+        console.error('❌ Container seasons-grid not found!');
+        return;
+    }
+    
+    if (!seasons || seasons.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 2rem;">
+                <p style="color: var(--color-text-muted);">Žádné sezóny nenalezeny</p>
+            </div>
+        `;
+        return;
+    }
+    
+    // Build tree HTML
+    let treeHtml = `
+        <div class="series-tree">
+            <div class="series-tree-header">
+                <div class="series-tree-title">${escapeHtml(seriesTitle)}</div>
+                <div class="series-tree-actions">
+                    <button class="series-tree-btn" onclick="selectAllEpisodes()">
+                        <i class="fas fa-check-double"></i> Vybrat vše
+                    </button>
+                    <button class="series-tree-btn" onclick="deselectAllEpisodes()">
+                        <i class="fas fa-times"></i> Zrušit výběr
+                    </button>
+                </div>
+            </div>
+            <div class="series-tree-content">
+    `;
+    
+    seasons.forEach(season => {
+        const episodeCount = season.episodes ? season.episodes.length : 0;
+        
+        treeHtml += `
+            <div class="season-node" data-season="${season.season}">
+                <div class="season-header" onclick="toggleSeason(${season.season})">
+                    <i class="fas fa-chevron-right season-toggle" id="toggle-${season.season}"></i>
+                    <div class="season-checkbox-wrapper">
+                        <input type="checkbox" class="season-checkbox" id="season-cb-${season.season}" 
+                               data-season="${season.season}" onchange="toggleSeasonCheckbox(${season.season})"
+                               onclick="event.stopPropagation()">
+                    </div>
+                    <span class="season-label">Série ${season.season.toString().padStart(2, '0')}</span>
+                    <span class="season-count">${episodeCount} dílů</span>
+                </div>
+                <div class="episodes-list" id="episodes-${season.season}">
+        `;
+        
+        if (season.episodes && season.episodes.length > 0) {
+            season.episodes.forEach(episode => {
+                const epNum = episode.Episode || '?';
+                const epTitle = episode.Title || 'Bez názvu';
+                const epRating = episode.imdbRating && episode.imdbRating !== 'N/A' ? episode.imdbRating : null;
+                
+                treeHtml += `
+                    <div class="episode-item" data-season="${season.season}" data-episode="${epNum}">
+                        <input type="checkbox" class="episode-checkbox" 
+                               id="ep-cb-${season.season}-${epNum}"
+                               data-season="${season.season}" 
+                               data-episode="${epNum}"
+                               data-title="${escapeHtml(epTitle)}"
+                               onchange="updateSeasonCheckbox(${season.season})">
+                        <span class="episode-number">${epNum}</span>
+                        <span class="episode-title">${escapeHtml(epTitle)}</span>
+                        ${epRating ? `<span class="episode-rating"><i class="fas fa-star"></i> ${epRating}</span>` : ''}
+                    </div>
+                `;
+            });
+        } else {
+            treeHtml += `
+                <div class="episode-item" style="color: var(--color-text-muted); justify-content: center;">
+                    Žádné díly nenalezeny
+                </div>
+            `;
+        }
+        
+        treeHtml += `
+                </div>
+            </div>
+        `;
+    });
+    
+    treeHtml += `
+            </div>
+        </div>
+        
+        <div class="selection-summary" id="selection-summary">
+            <div class="selection-info">
+                <span class="selection-count" id="selected-count">0 dílů vybráno</span>
+                <span class="selection-detail" id="selected-detail">Vyberte díly ke stažení</span>
+            </div>
+            <div class="selection-actions">
+                <button class="btn btn-primary" onclick="proceedWithSelectedEpisodes()" id="proceed-btn" disabled>
+                    <i class="fas fa-download"></i> POKRAČOVAT KE STAŽENÍ
+                </button>
+            </div>
+        </div>
+    `;
+    
+    console.log('📺 Setting innerHTML, HTML length:', treeHtml.length);
+    container.innerHTML = treeHtml;
+    console.log('📺 innerHTML set, container children:', container.children.length);
+    updateSelectionSummary();
+}
+
+/**
+ * Toggle season expansion
+ */
+function toggleSeason(seasonNum) {
+    const episodesList = document.getElementById(`episodes-${seasonNum}`);
+    const toggleIcon = document.getElementById(`toggle-${seasonNum}`);
+    
+    if (episodesList.classList.contains('expanded')) {
+        episodesList.classList.remove('expanded');
+        toggleIcon.classList.remove('expanded');
+    } else {
+        episodesList.classList.add('expanded');
+        toggleIcon.classList.add('expanded');
+    }
+}
+
+/**
+ * Toggle all episodes in a season when season checkbox is clicked
+ */
+function toggleSeasonCheckbox(seasonNum) {
+    const seasonCheckbox = document.getElementById(`season-cb-${seasonNum}`);
+    const episodeCheckboxes = document.querySelectorAll(`.episode-checkbox[data-season="${seasonNum}"]`);
+    
+    episodeCheckboxes.forEach(cb => {
+        cb.checked = seasonCheckbox.checked;
+    });
+    
+    // Expand the season if checking
+    if (seasonCheckbox.checked) {
+        const episodesList = document.getElementById(`episodes-${seasonNum}`);
+        const toggleIcon = document.getElementById(`toggle-${seasonNum}`);
+        episodesList.classList.add('expanded');
+        toggleIcon.classList.add('expanded');
+    }
+    
+    updateSelectionSummary();
+}
+
+/**
+ * Update season checkbox based on episode selections
+ */
+function updateSeasonCheckbox(seasonNum) {
+    const seasonCheckbox = document.getElementById(`season-cb-${seasonNum}`);
+    const episodeCheckboxes = document.querySelectorAll(`.episode-checkbox[data-season="${seasonNum}"]`);
+    
+    const checkedCount = Array.from(episodeCheckboxes).filter(cb => cb.checked).length;
+    const totalCount = episodeCheckboxes.length;
+    
+    if (checkedCount === 0) {
+        seasonCheckbox.checked = false;
+        seasonCheckbox.indeterminate = false;
+    } else if (checkedCount === totalCount) {
+        seasonCheckbox.checked = true;
+        seasonCheckbox.indeterminate = false;
+    } else {
+        seasonCheckbox.checked = false;
+        seasonCheckbox.indeterminate = true;
+    }
+    
+    updateSelectionSummary();
+}
+
+/**
+ * Select all episodes
+ */
+function selectAllEpisodes() {
+    document.querySelectorAll('.episode-checkbox').forEach(cb => cb.checked = true);
+    document.querySelectorAll('.season-checkbox').forEach(cb => {
+        cb.checked = true;
+        cb.indeterminate = false;
+    });
+    updateSelectionSummary();
+}
+
+/**
+ * Deselect all episodes
+ */
+function deselectAllEpisodes() {
+    document.querySelectorAll('.episode-checkbox').forEach(cb => cb.checked = false);
+    document.querySelectorAll('.season-checkbox').forEach(cb => {
+        cb.checked = false;
+        cb.indeterminate = false;
+    });
+    updateSelectionSummary();
+}
+
+/**
+ * Update selection summary
+ */
+function updateSelectionSummary() {
+    const checkedEpisodes = document.querySelectorAll('.episode-checkbox:checked');
+    const count = checkedEpisodes.length;
+    
+    const countEl = document.getElementById('selected-count');
+    const detailEl = document.getElementById('selected-detail');
+    const proceedBtn = document.getElementById('proceed-btn');
+    
+    if (!countEl) return;
+    
+    countEl.textContent = `${count} ${count === 1 ? 'díl vybrán' : count >= 2 && count <= 4 ? 'díly vybrány' : 'dílů vybráno'}`;
+    
+    if (count > 0) {
+        // Group by seasons
+        const seasonCounts = {};
+        checkedEpisodes.forEach(cb => {
+            const season = cb.dataset.season;
+            seasonCounts[season] = (seasonCounts[season] || 0) + 1;
+        });
+        
+        const seasonSummary = Object.entries(seasonCounts)
+            .map(([s, c]) => `S${s.padStart(2, '0')}: ${c}`)
+            .join(', ');
+        
+        detailEl.textContent = seasonSummary;
+        proceedBtn.disabled = false;
+    } else {
+        detailEl.textContent = 'Vyberte díly ke stažení';
+        proceedBtn.disabled = true;
+    }
+}
+
+/**
+ * Get selected episodes data
+ */
+function getSelectedEpisodes() {
+    const selected = [];
+    document.querySelectorAll('.episode-checkbox:checked').forEach(cb => {
+        selected.push({
+            season: parseInt(cb.dataset.season),
+            episode: parseInt(cb.dataset.episode),
+            title: cb.dataset.title || ''
+        });
+    });
+    
+    // Sort by season, then episode
+    selected.sort((a, b) => {
+        if (a.season !== b.season) return a.season - b.season;
+        return a.episode - b.episode;
+    });
+    
+    return selected;
+}
+
+/**
+ * Proceed with selected episodes (placeholder for next step)
+ */
+function proceedWithSelectedEpisodes() {
+    const selected = getSelectedEpisodes();
+    
+    if (selected.length === 0) {
+        showToast('Vyberte alespoň jeden díl', 'warning');
+        return;
+    }
+    
+    console.log('Selected episodes:', selected);
+    console.log('Series info:', window.selectedSeries);
+    
+    showToast(`Připraveno ${selected.length} dílů ke stažení - další krok bude implementován`, 'info');
+    
+    // TODO: Next step - search for episodes on prehrajto.cz and download
+}
+
+/**
+ * Display seasons for selection (legacy function - kept for compatibility)
  */
 function displaySeasons(seriesData) {
+    // Redirect to new tree view if we have detailed episodes
+    if (seriesData.seasons && seriesData.seasons[0] && seriesData.seasons[0].episodes) {
+        displaySeasonsTree(seriesData.seasons, seriesData.Title || window.selectedSeries?.title);
+        return;
+    }
+    
     const container = document.getElementById('seasons-grid');
     
     if (!seriesData.seasons || seriesData.seasons.length === 0) {

@@ -618,6 +618,102 @@ app.get('/api/imdb/series/:imdbId', async (req, res) => {
     }
 });
 
+// Get all seasons with episodes for a series
+app.get('/api/imdb/series/:imdbId/seasons', async (req, res) => {
+    try {
+        const imdbId = req.params.imdbId;
+        
+        if (OMDB_API_KEY === 'your-api-key-here') {
+            // Mock data for development
+            const mockSeasons = [];
+            for (let s = 1; s <= 3; s++) {
+                const episodes = [];
+                const episodeCount = Math.floor(Math.random() * 8) + 6; // 6-13 episodes
+                for (let e = 1; e <= episodeCount; e++) {
+                    episodes.push({
+                        Episode: e.toString(),
+                        Title: `Epizoda ${e} - Mock název`,
+                        Released: `2020-0${s}-${e.toString().padStart(2, '0')}`,
+                        imdbRating: (Math.random() * 3 + 7).toFixed(1),
+                        imdbID: `tt${Math.random().toString().substring(2, 9)}`
+                    });
+                }
+                mockSeasons.push({
+                    season: s,
+                    episodes: episodes
+                });
+            }
+            
+            console.log('📺 Returning mock seasons with episodes for:', imdbId);
+            return res.json({ success: true, seasons: mockSeasons });
+        }
+        
+        // First get series details to know how many seasons
+        const detailsUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${imdbId}`;
+        const detailsResponse = await axios.get(detailsUrl, { timeout: 10000 });
+        
+        if (detailsResponse.data.Response !== 'True') {
+            return res.status(404).json({
+                success: false,
+                error: 'Seriál nebyl nalezen'
+            });
+        }
+        
+        const totalSeasons = parseInt(detailsResponse.data.totalSeasons) || 1;
+        const seriesTitle = detailsResponse.data.Title;
+        
+        console.log(`📺 Loading ${totalSeasons} seasons for: ${seriesTitle}`);
+        
+        // Fetch all seasons in parallel
+        const seasonPromises = [];
+        for (let s = 1; s <= totalSeasons; s++) {
+            const seasonUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${imdbId}&Season=${s}`;
+            seasonPromises.push(
+                axios.get(seasonUrl, { timeout: 10000 })
+                    .then(response => ({
+                        season: s,
+                        data: response.data
+                    }))
+                    .catch(err => ({
+                        season: s,
+                        error: err.message
+                    }))
+            );
+        }
+        
+        const seasonResults = await Promise.all(seasonPromises);
+        
+        const seasons = seasonResults
+            .filter(result => result.data && result.data.Response === 'True')
+            .map(result => ({
+                season: result.season,
+                episodes: (result.data.Episodes || []).map(ep => ({
+                    Episode: ep.Episode,
+                    Title: ep.Title,
+                    Released: ep.Released,
+                    imdbRating: ep.imdbRating,
+                    imdbID: ep.imdbID
+                }))
+            }));
+        
+        console.log(`✅ Loaded ${seasons.length} seasons with episodes`);
+        
+        res.json({
+            success: true,
+            seriesTitle: seriesTitle,
+            totalSeasons: totalSeasons,
+            seasons: seasons
+        });
+        
+    } catch (error) {
+        console.error('Chyba při získávání sezón:', error.message);
+        res.status(500).json({
+            success: false,
+            error: 'Nepodařilo se získat sezóny seriálu'
+        });
+    }
+});
+
 // Titulky.com scraping endpoint
 app.get('/api/subtitles/:title/:year?', async (req, res) => {
     try {

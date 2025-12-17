@@ -1270,3 +1270,224 @@ h1, h2, h3, h4, h5, h6 {
         transform: translateY(0);
     }
 }
+
+/* ===============================================
+   SERIES TREE VIEW
+   =============================================== */
+
+.series-tree {
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.series-tree-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+    padding-bottom: var(--spacing-sm);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.series-tree-title {
+    font-size: 1.5rem;
+    font-weight: var(--font-weight-bold);
+    color: var(--color-glitch-cyan);
+}
+
+.series-tree-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.series-tree-btn {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.series-tree-btn:hover {
+    border-color: var(--color-glitch-cyan);
+    color: var(--color-text-primary);
+}
+
+.season-node {
+    margin-bottom: var(--spacing-sm);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+}
+
+.season-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-bg-secondary);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    user-select: none;
+}
+
+.season-header:hover {
+    background: rgba(0, 255, 255, 0.05);
+}
+
+.season-toggle {
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    transition: transform var(--transition-fast);
+    width: 16px;
+}
+
+.season-toggle.expanded {
+    transform: rotate(90deg);
+}
+
+.season-checkbox-wrapper {
+    display: flex;
+    align-items: center;
+}
+
+.season-checkbox {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    accent-color: var(--color-glitch-cyan);
+}
+
+.season-label {
+    font-weight: var(--font-weight-bold);
+    font-size: 1.1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex: 1;
+}
+
+.season-count {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+}
+
+.episodes-list {
+    display: none;
+    padding: var(--spacing-xs) 0;
+    background: var(--color-bg);
+}
+
+.episodes-list.expanded {
+    display: block;
+}
+
+.episode-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-md) var(--spacing-xs) calc(var(--spacing-md) + 36px);
+    transition: var(--transition-fast);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.episode-item:last-child {
+    border-bottom: none;
+}
+
+.episode-item:hover {
+    background: rgba(0, 255, 255, 0.03);
+}
+
+.episode-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--color-glitch-cyan);
+}
+
+.episode-number {
+    color: var(--color-glitch-cyan);
+    font-weight: var(--font-weight-bold);
+    min-width: 30px;
+}
+
+.episode-title {
+    flex: 1;
+    color: var(--color-text-secondary);
+}
+
+.episode-rating {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.episode-rating i {
+    color: gold;
+    font-size: 0.75rem;
+}
+
+/* Selection summary */
+.selection-summary {
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.selection-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.selection-count {
+    font-size: 1.25rem;
+    font-weight: var(--font-weight-bold);
+    color: var(--color-glitch-cyan);
+}
+
+.selection-detail {
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+}
+
+.selection-actions .btn {
+    font-size: 1.1rem;
+    padding: 1rem 2rem;
+}
+
+/* Loading state */
+.series-tree-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xl);
+    gap: var(--spacing-md);
+}
+
+.series-tree-loading i {
+    font-size: 3rem;
+    color: var(--color-glitch-cyan);
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
