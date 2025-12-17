@@ -1491,3 +1491,306 @@ h1, h2, h3, h4, h5, h6 {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
+
+/* ===============================================
+   EPISODE SELECTION UI
+   =============================================== */
+
+.episode-selection-header {
+    text-align: center;
+    margin-bottom: var(--spacing-md);
+    padding-bottom: var(--spacing-sm);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.episode-selection-header h3 {
+    font-size: 1.5rem;
+    color: var(--color-glitch-cyan);
+    margin-bottom: 0.5rem;
+}
+
+.episode-selection-progress {
+    color: var(--color-text-secondary);
+    font-size: 1.1rem;
+}
+
+.episode-selection-progress span {
+    color: var(--color-glitch-cyan);
+    font-weight: var(--font-weight-bold);
+}
+
+.episode-search-status {
+    margin-bottom: var(--spacing-md);
+}
+
+.episode-current-info {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    flex-wrap: wrap;
+}
+
+.episode-badge {
+    background: var(--color-glitch-cyan);
+    color: var(--color-bg);
+    padding: 0.25rem 0.75rem;
+    border-radius: var(--border-radius);
+    font-weight: var(--font-weight-bold);
+    font-size: 0.9rem;
+    letter-spacing: 0.05em;
+}
+
+.episode-name {
+    font-weight: var(--font-weight-semibold);
+    flex: 1;
+}
+
+.episode-search-query {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+}
+
+.episode-results-container {
+    margin-bottom: var(--spacing-md);
+}
+
+.episode-results-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.episode-result-card {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    background: var(--color-bg-tertiary);
+    border: 2px solid var(--color-border);
+    border-radius: var(--border-radius);
+    transition: var(--transition-fast);
+}
+
+.episode-result-card:hover {
+    border-color: var(--color-glitch-cyan);
+    transform: translateX(4px);
+}
+
+.episode-result-card.recommended {
+    border-color: var(--color-glitch-green);
+    background: rgba(0, 255, 0, 0.03);
+}
+
+.episode-result-card.recommended::before {
+    content: 'DOPORUČENO';
+    position: absolute;
+    top: -8px;
+    right: 10px;
+    background: var(--color-glitch-green);
+    color: var(--color-bg);
+    padding: 0.1rem 0.5rem;
+    font-size: 0.7rem;
+    font-weight: var(--font-weight-bold);
+    border-radius: var(--border-radius);
+}
+
+.episode-result-card {
+    position: relative;
+}
+
+.episode-result-thumb {
+    width: 80px;
+    height: 60px;
+    background: var(--color-bg-secondary);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.episode-result-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.episode-result-thumb i {
+    font-size: 1.5rem;
+    color: var(--color-text-muted);
+}
+
+.episode-result-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.episode-result-info h4 {
+    font-size: 0.95rem;
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.episode-result-meta {
+    display: flex;
+    gap: var(--spacing-sm);
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+}
+
+.episode-result-meta span {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.episode-select-btn {
+    flex-shrink: 0;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+}
+
+.episode-not-found {
+    text-align: center;
+    padding: var(--spacing-lg);
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+}
+
+.episode-not-found i {
+    font-size: 3rem;
+    color: var(--color-text-muted);
+    margin-bottom: var(--spacing-sm);
+}
+
+.episode-not-found h4 {
+    color: var(--color-text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.episode-not-found p {
+    color: var(--color-text-muted);
+    margin-bottom: var(--spacing-md);
+}
+
+.episode-selection-summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-md);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+}
+
+.episode-summary-count {
+    font-size: 1.25rem;
+    font-weight: var(--font-weight-bold);
+    color: var(--color-glitch-cyan);
+}
+
+.episode-selection-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.episode-selection-complete {
+    text-align: center;
+    padding: var(--spacing-lg);
+}
+
+.episode-selection-complete i {
+    font-size: 4rem;
+    color: var(--color-glitch-green);
+    margin-bottom: var(--spacing-sm);
+}
+
+.episode-selection-complete h3 {
+    color: var(--color-glitch-green);
+    margin-bottom: 0.5rem;
+}
+
+.selected-episodes-summary {
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-md);
+}
+
+.selected-episodes-summary h4 {
+    color: var(--color-text-secondary);
+    margin-bottom: var(--spacing-sm);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.selected-episodes-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.selected-episode-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    font-size: 0.85rem;
+}
+
+/* Series HUD Card enhancements */
+.download-hud-card.series-download {
+    min-width: 320px;
+}
+
+.download-hud-episode {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+    font-size: 0.85rem;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 0.5rem;
+}
+
+.download-hud-episode .episode-badge {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+}
+
+.download-hud-episodes-progress {
+    text-align: center;
+    padding-top: 0.5rem;
+    margin-top: 0.5rem;
+    border-top: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+}
+
+/* Button secondary style */
+.btn-secondary {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+}
+
+.btn-secondary:hover {
+    border-color: var(--color-text-secondary);
+    color: var(--color-text-primary);
+}

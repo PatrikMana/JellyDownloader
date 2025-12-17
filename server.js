@@ -1309,6 +1309,193 @@ function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
     return baseDir;
 }
 
+// Series Download endpoint - downloads multiple episodes
+app.post('/api/download/series', async (req, res) => {
+    const { seriesTitle, seriesImdbId, seriesImdbData, episodes } = req.body;
+    
+    if (!seriesTitle || !episodes || episodes.length === 0) {
+        return res.status(400).json({ success: false, error: 'Chybí povinné parametry' });
+    }
+    
+    // Create job for series download
+    const job = createJob({ 
+        title: seriesTitle, 
+        type: 'series-batch',
+        totalEpisodes: episodes.length,
+        completedEpisodes: 0
+    });
+    cleanupJobLater(job.jobId, 2 * 60 * 60 * 1000); // 2 hours for series
+    
+    // Return jobId immediately
+    res.json({ success: true, jobId: job.jobId });
+    
+    // Process episodes sequentially
+    (async () => {
+        job.status = 'downloading';
+        job.abortController = new AbortController();
+        
+        const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+        const cleanSeriesTitle = seriesTitle.replace(/[<>:"/\\|?*]/g, '').trim();
+        const seriesSuffix = seriesImdbId ? ` [imdbid-${seriesImdbId}]` : '';
+        const seriesDir = path.join(baseDir, 'tvshows', `${cleanSeriesTitle}${seriesSuffix}`);
+        
+        job.downloadDir = seriesDir;
+        
+        let completedEpisodes = 0;
+        
+        try {
+            for (let i = 0; i < episodes.length; i++) {
+                // Check if canceled
+                if (job.status === 'canceled') {
+                    emitJob(job, { type: 'canceled', jobId: job.jobId });
+                    return;
+                }
+                
+                const ep = episodes[i];
+                const seasonStr = String(ep.season).padStart(2, '0');
+                const episodeStr = String(ep.episode).padStart(2, '0');
+                
+                // Emit episode start
+                emitJob(job, {
+                    type: 'episode-start',
+                    jobId: job.jobId,
+                    season: ep.season,
+                    episode: ep.episode,
+                    episodeTitle: ep.episodeTitle || ep.prehrajtoTitle,
+                    currentIndex: i + 1,
+                    totalEpisodes: episodes.length
+                });
+                
+                // Get episode-specific IMDB ID
+                let episodeImdbId = null;
+                try {
+                    const episodeUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${seriesImdbId}&Season=${ep.season}&Episode=${ep.episode}`;
+                    const episodeResponse = await axios.get(episodeUrl, { timeout: 10000 });
+                    if (episodeResponse.data.Response === 'True') {
+                        episodeImdbId = episodeResponse.data.imdbID;
+                        console.log(`📺 Got IMDB ID for S${seasonStr}E${episodeStr}: ${episodeImdbId}`);
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ Could not get episode IMDB ID: ${e.message}`);
+                }
+                
+                // Create season directory
+                const seasonDir = path.join(seriesDir, `Season ${seasonStr}`);
+                if (!fs.existsSync(seasonDir)) {
+                    fs.mkdirSync(seasonDir, { recursive: true });
+                }
+                
+                // Generate filename: "Název seriálu sXXeXX [imdbid-XXXXXX].ext"
+                const episodeSuffix = episodeImdbId ? ` [imdbid-${episodeImdbId}]` : '';
+                const urlExt = ep.videoUrl.match(/\.(mp4|mkv|avi|webm)(?:[?#]|$)/i);
+                const videoExt = urlExt ? urlExt[1] : 'mp4';
+                const episodeFilename = `${cleanSeriesTitle} s${seasonStr}e${episodeStr}${episodeSuffix}.${videoExt}`;
+                const episodePath = path.join(seasonDir, episodeFilename);
+                
+                console.log(`📥 Downloading: ${episodeFilename}`);
+                
+                // Download the episode
+                const videoResponse = await axios({
+                    method: 'GET',
+                    url: ep.videoUrl,
+                    responseType: 'stream',
+                    timeout: 0,
+                    maxRedirects: 5,
+                    signal: job.abortController.signal,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0',
+                        'Referer': 'https://prehrajto.cz/',
+                        'Accept': '*/*',
+                        'Connection': 'keep-alive'
+                    }
+                });
+                
+                const writeStream = fs.createWriteStream(episodePath);
+                const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
+                
+                let downloadedBytes = 0;
+                let lastTickBytes = 0;
+                let lastTickTime = Date.now();
+                const startTime = Date.now();
+                
+                videoResponse.data.on('data', (chunk) => {
+                    downloadedBytes += chunk.length;
+                    
+                    const now = Date.now();
+                    if (now - lastTickTime >= 1000) {
+                        const dt = (now - lastTickTime) / 1000;
+                        const dB = downloadedBytes - lastTickBytes;
+                        const speed = dt > 0 ? (dB / dt) : 0;
+                        const etaSec = (totalBytes > 0 && speed > 0) ? ((totalBytes - downloadedBytes) / speed) : null;
+                        const progress = totalBytes > 0 ? (downloadedBytes / totalBytes * 100) : 0;
+                        
+                        emitJob(job, {
+                            type: 'progress',
+                            jobId: job.jobId,
+                            downloadedBytes,
+                            totalBytes,
+                            progress,
+                            speedBps: speed,
+                            etaSec,
+                            currentEpisode: i + 1,
+                            totalEpisodes: episodes.length
+                        });
+                        
+                        lastTickBytes = downloadedBytes;
+                        lastTickTime = now;
+                    }
+                });
+                
+                await pipelineAsync(videoResponse.data, writeStream);
+                
+                completedEpisodes++;
+                job.completedEpisodes = completedEpisodes;
+                
+                console.log(`✅ Episode downloaded: ${episodeFilename}`);
+                
+                emitJob(job, {
+                    type: 'episode-done',
+                    jobId: job.jobId,
+                    season: ep.season,
+                    episode: ep.episode,
+                    filename: episodeFilename,
+                    completedEpisodes: completedEpisodes,
+                    totalEpisodes: episodes.length
+                });
+            }
+            
+            // All episodes downloaded
+            job.status = 'done';
+            
+            emitJob(job, {
+                type: 'done',
+                jobId: job.jobId,
+                seriesTitle: seriesTitle,
+                path: seriesDir,
+                totalEpisodes: episodes.length,
+                completedEpisodes: completedEpisodes
+            });
+            
+            console.log(`✅ Series download complete: ${seriesTitle} (${completedEpisodes} episodes)`);
+            
+        } catch (error) {
+            if (job.status === 'canceled') {
+                emitJob(job, { type: 'canceled', jobId: job.jobId });
+                return;
+            }
+            
+            job.status = 'error';
+            console.error(`❌ Series download error: ${error.message}`);
+            
+            emitJob(job, {
+                type: 'error',
+                jobId: job.jobId,
+                error: error.message || 'Stahování selhalo'
+            });
+        }
+    })();
+});
+
 // Download endpoint
 app.post('/api/download', async (req, res) => {
     const { videoUrl, title, imdbData, type = 'movie', subtitles = [], season = null, episode = null } = req.body;

@@ -848,9 +848,9 @@ function getSelectedEpisodes() {
 }
 
 /**
- * Proceed with selected episodes (placeholder for next step)
+ * Proceed with selected episodes - start episode selection workflow
  */
-function proceedWithSelectedEpisodes() {
+async function proceedWithSelectedEpisodes() {
     const selected = getSelectedEpisodes();
     
     if (selected.length === 0) {
@@ -858,12 +858,564 @@ function proceedWithSelectedEpisodes() {
         return;
     }
     
-    console.log('Selected episodes:', selected);
-    console.log('Series info:', window.selectedSeries);
+    console.log('📺 Selected episodes:', selected);
+    console.log('📺 Series info:', window.selectedSeries);
     
-    showToast(`Připraveno ${selected.length} dílů ke stažení - další krok bude implementován`, 'info');
+    // Initialize series download state
+    window.seriesDownload = {
+        series: window.selectedSeries,
+        episodes: selected,
+        currentIndex: 0,
+        selectedEpisodes: [], // Will store { episode, prehrajtoResult, selectedQualityUrl }
+        totalEpisodes: selected.length
+    };
     
-    // TODO: Next step - search for episodes on prehrajto.cz and download
+    // Show episode selection section
+    showEpisodeSelectionUI();
+    
+    // Start with first episode
+    await searchNextEpisode();
+}
+
+/**
+ * Show the episode selection UI
+ */
+function showEpisodeSelectionUI() {
+    const container = document.getElementById('episodes-selection');
+    if (!container) return;
+    
+    container.style.display = 'block';
+    
+    const episodesContainer = document.getElementById('episodes-container');
+    episodesContainer.innerHTML = `
+        <div class="episode-selection-header">
+            <h3>VÝBĚR KVALITY PRO JEDNOTLIVÉ DÍLY</h3>
+            <p class="episode-selection-progress">
+                Díl <span id="current-episode-num">1</span> z <span id="total-episodes-num">${window.seriesDownload.totalEpisodes}</span>
+            </p>
+        </div>
+        
+        <div class="episode-search-status" id="episode-search-status">
+            <div class="series-tree-loading">
+                <i class="fas fa-spinner"></i>
+                <p>Vyhledávám díl na prehrajto.cz...</p>
+            </div>
+        </div>
+        
+        <div class="episode-results-container" id="episode-results-container" style="display: none;">
+            <!-- Results will be populated here -->
+        </div>
+        
+        <div class="episode-selection-summary" id="episode-selection-summary">
+            <div class="episode-summary-info">
+                <span class="episode-summary-count" id="episode-summary-count">0 / ${window.seriesDownload.totalEpisodes} dílů vybráno</span>
+            </div>
+            <div class="episode-selection-actions">
+                <button class="btn btn-secondary" onclick="skipCurrentEpisode()">
+                    <i class="fas fa-forward"></i> PŘESKOČIT DÍL
+                </button>
+                <button class="btn btn-primary" onclick="startSeriesDownload()" id="start-series-download-btn" disabled>
+                    <i class="fas fa-download"></i> STÁHNOUT VYBRANÉ
+                </button>
+            </div>
+        </div>
+    `;
+    
+    // Scroll to section
+    container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/**
+ * Search for next episode on prehrajto.cz
+ */
+async function searchNextEpisode() {
+    const state = window.seriesDownload;
+    if (!state || state.currentIndex >= state.episodes.length) {
+        // All episodes searched
+        showToast('Všechny díly byly vyhledány', 'success');
+        updateEpisodeSelectionSummary();
+        return;
+    }
+    
+    const episode = state.episodes[state.currentIndex];
+    const seriesTitle = state.series.title;
+    
+    // Update progress
+    document.getElementById('current-episode-num').textContent = state.currentIndex + 1;
+    
+    // Build search query: "Název seriálu sXXeXX"
+    const seasonStr = episode.season.toString().padStart(2, '0');
+    const episodeStr = episode.episode.toString().padStart(2, '0');
+    const searchQuery = `${seriesTitle} s${seasonStr}e${episodeStr}`;
+    
+    console.log(`🔍 Searching for episode: ${searchQuery}`);
+    
+    // Show loading
+    const statusContainer = document.getElementById('episode-search-status');
+    statusContainer.innerHTML = `
+        <div class="series-tree-loading">
+            <i class="fas fa-spinner"></i>
+            <p>Vyhledávám: <strong>${escapeHtml(searchQuery)}</strong></p>
+        </div>
+    `;
+    statusContainer.style.display = 'block';
+    document.getElementById('episode-results-container').style.display = 'none';
+    
+    try {
+        // Search on prehrajto.cz
+        const results = await searchPrehrajto(searchQuery);
+        
+        if (results.length === 0) {
+            // Try alternative search format
+            const altQuery = `${seriesTitle} ${episode.season}x${episodeStr}`;
+            console.log(`🔍 No results, trying alternative: ${altQuery}`);
+            const altResults = await searchPrehrajto(altQuery);
+            
+            if (altResults.length === 0) {
+                showEpisodeNotFound(episode, searchQuery);
+                return;
+            }
+            
+            showEpisodeResults(episode, altResults, altQuery);
+        } else {
+            showEpisodeResults(episode, results, searchQuery);
+        }
+        
+    } catch (error) {
+        console.error('Episode search error:', error);
+        showToast(`Chyba při vyhledávání: ${error.message}`, 'error');
+        showEpisodeNotFound(episode, searchQuery);
+    }
+}
+
+/**
+ * Show episode search results
+ */
+function showEpisodeResults(episode, results, searchQuery) {
+    const statusContainer = document.getElementById('episode-search-status');
+    const resultsContainer = document.getElementById('episode-results-container');
+    
+    const seasonStr = episode.season.toString().padStart(2, '0');
+    const episodeStr = episode.episode.toString().padStart(2, '0');
+    
+    statusContainer.innerHTML = `
+        <div class="episode-current-info">
+            <span class="episode-badge">S${seasonStr}E${episodeStr}</span>
+            <span class="episode-name">${escapeHtml(episode.title || 'Bez názvu')}</span>
+            <span class="episode-search-query">Hledáno: "${escapeHtml(searchQuery)}"</span>
+        </div>
+    `;
+    
+    // Sort results by smart algorithm (same as movies)
+    const sortedResults = sortResults(results, 'smart');
+    
+    resultsContainer.innerHTML = `
+        <div class="episode-results-grid">
+            ${sortedResults.slice(0, 10).map((result, index) => `
+                <div class="episode-result-card ${index === 0 ? 'recommended' : ''}" 
+                     data-href="${escapeHtml(result.href)}"
+                     data-title="${escapeHtml(result.title)}">
+                    <div class="episode-result-thumb">
+                        ${result.imageSrc ? `<img src="${result.imageSrc}" alt="">` : '<i class="fas fa-film"></i>'}
+                    </div>
+                    <div class="episode-result-info">
+                        <h4>${escapeHtml(result.title)}</h4>
+                        <div class="episode-result-meta">
+                            ${result.duration ? `<span><i class="fas fa-clock"></i> ${result.duration}</span>` : ''}
+                            ${result.size ? `<span><i class="fas fa-hdd"></i> ${result.size}</span>` : ''}
+                        </div>
+                    </div>
+                    <button class="btn btn-primary episode-select-btn" onclick="selectEpisodeResult(this, '${escapeHtml(result.href)}', '${escapeHtml(result.title)}')">
+                        VYBRAT
+                    </button>
+                </div>
+            `).join('')}
+        </div>
+        ${results.length === 0 ? '<p class="no-results">Žádné výsledky nenalezeny</p>' : ''}
+    `;
+    
+    resultsContainer.style.display = 'block';
+}
+
+/**
+ * Show episode not found message
+ */
+function showEpisodeNotFound(episode, searchQuery) {
+    const statusContainer = document.getElementById('episode-search-status');
+    const resultsContainer = document.getElementById('episode-results-container');
+    
+    const seasonStr = episode.season.toString().padStart(2, '0');
+    const episodeStr = episode.episode.toString().padStart(2, '0');
+    
+    statusContainer.innerHTML = `
+        <div class="episode-current-info">
+            <span class="episode-badge">S${seasonStr}E${episodeStr}</span>
+            <span class="episode-name">${escapeHtml(episode.title || 'Bez názvu')}</span>
+        </div>
+    `;
+    
+    resultsContainer.innerHTML = `
+        <div class="episode-not-found">
+            <i class="fas fa-exclamation-triangle"></i>
+            <h4>Díl nebyl nalezen na prehrajto.cz</h4>
+            <p>Hledáno: "${escapeHtml(searchQuery)}"</p>
+            <button class="btn btn-secondary" onclick="skipCurrentEpisode()">
+                <i class="fas fa-forward"></i> PŘESKOČIT A POKRAČOVAT
+            </button>
+        </div>
+    `;
+    
+    resultsContainer.style.display = 'block';
+}
+
+/**
+ * Select a prehrajto result for current episode and get quality
+ */
+async function selectEpisodeResult(button, href, title) {
+    const state = window.seriesDownload;
+    const episode = state.episodes[state.currentIndex];
+    
+    // Show loading on button
+    const originalText = button.innerHTML;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> NAČÍTÁM...';
+    button.disabled = true;
+    
+    try {
+        // Get video data (qualities)
+        showToast('Načítám dostupné kvality...', 'info');
+        const videoData = await getVideoData(href);
+        
+        if (!videoData.qualities || videoData.qualities.length === 0) {
+            throw new Error('Žádné kvality nenalezeny');
+        }
+        
+        // Show quality selector
+        const selectedUrl = await showQualitySelector(videoData.qualities, title);
+        
+        // Store selected episode
+        state.selectedEpisodes.push({
+            episode: episode,
+            prehrajtoHref: href,
+            prehrajtoTitle: title,
+            selectedQualityUrl: selectedUrl
+        });
+        
+        console.log(`✅ Episode S${episode.season}E${episode.episode} selected with quality`);
+        
+        // Move to next episode
+        state.currentIndex++;
+        updateEpisodeSelectionSummary();
+        
+        // Search next episode
+        if (state.currentIndex < state.episodes.length) {
+            await searchNextEpisode();
+        } else {
+            showAllEpisodesSelected();
+        }
+        
+    } catch (error) {
+        if (error.message === 'Výběr kvality zrušen') {
+            showToast('Výběr kvality zrušen', 'info');
+        } else {
+            console.error('Error selecting episode:', error);
+            showToast(`Chyba: ${error.message}`, 'error');
+        }
+        
+        // Restore button
+        button.innerHTML = originalText;
+        button.disabled = false;
+    }
+}
+
+/**
+ * Skip current episode
+ */
+async function skipCurrentEpisode() {
+    const state = window.seriesDownload;
+    
+    console.log(`⏭️ Skipping episode ${state.currentIndex + 1}`);
+    
+    state.currentIndex++;
+    
+    if (state.currentIndex < state.episodes.length) {
+        await searchNextEpisode();
+    } else {
+        showAllEpisodesSelected();
+    }
+}
+
+/**
+ * Show all episodes have been processed
+ */
+function showAllEpisodesSelected() {
+    const statusContainer = document.getElementById('episode-search-status');
+    const resultsContainer = document.getElementById('episode-results-container');
+    const state = window.seriesDownload;
+    
+    statusContainer.innerHTML = `
+        <div class="episode-selection-complete">
+            <i class="fas fa-check-circle"></i>
+            <h3>VÝBĚR DOKONČEN</h3>
+            <p>Vybráno ${state.selectedEpisodes.length} z ${state.totalEpisodes} dílů</p>
+        </div>
+    `;
+    
+    // Show selected episodes summary
+    if (state.selectedEpisodes.length > 0) {
+        resultsContainer.innerHTML = `
+            <div class="selected-episodes-summary">
+                <h4>VYBRANÉ DÍLY:</h4>
+                <div class="selected-episodes-list">
+                    ${state.selectedEpisodes.map(ep => `
+                        <div class="selected-episode-item">
+                            <span class="episode-badge">S${ep.episode.season.toString().padStart(2, '0')}E${ep.episode.episode.toString().padStart(2, '0')}</span>
+                            <span class="episode-name">${escapeHtml(ep.episode.title || ep.prehrajtoTitle)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+        resultsContainer.style.display = 'block';
+    } else {
+        resultsContainer.innerHTML = `
+            <div class="episode-not-found">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h4>Žádné díly nebyly vybrány</h4>
+            </div>
+        `;
+        resultsContainer.style.display = 'block';
+    }
+    
+    updateEpisodeSelectionSummary();
+}
+
+/**
+ * Update episode selection summary
+ */
+function updateEpisodeSelectionSummary() {
+    const state = window.seriesDownload;
+    if (!state) return;
+    
+    const countEl = document.getElementById('episode-summary-count');
+    const downloadBtn = document.getElementById('start-series-download-btn');
+    
+    if (countEl) {
+        countEl.textContent = `${state.selectedEpisodes.length} / ${state.totalEpisodes} dílů vybráno`;
+    }
+    
+    if (downloadBtn) {
+        downloadBtn.disabled = state.selectedEpisodes.length === 0;
+    }
+}
+
+/**
+ * Start downloading all selected episodes
+ */
+async function startSeriesDownload() {
+    const state = window.seriesDownload;
+    
+    if (!state || state.selectedEpisodes.length === 0) {
+        showToast('Žádné díly k stažení', 'warning');
+        return;
+    }
+    
+    console.log('📥 Starting series download:', state);
+    
+    // Get IMDB info for the series
+    let seriesImdbData = null;
+    try {
+        const imdbResponse = await fetch(`${API_CONFIG.prehrajto}/imdb/series/${state.series.imdbId}`);
+        const imdbResult = await imdbResponse.json();
+        if (imdbResult.success) {
+            seriesImdbData = imdbResult.data;
+        }
+    } catch (e) {
+        console.warn('Could not fetch series IMDB data:', e);
+    }
+    
+    // Create series download job
+    const downloadData = {
+        seriesTitle: state.series.title,
+        seriesImdbId: state.series.imdbId,
+        seriesImdbData: seriesImdbData,
+        episodes: state.selectedEpisodes.map(ep => ({
+            season: ep.episode.season,
+            episode: ep.episode.episode,
+            episodeTitle: ep.episode.title,
+            prehrajtoTitle: ep.prehrajtoTitle,
+            videoUrl: ep.selectedQualityUrl
+        }))
+    };
+    
+    showToast(`Zahajuji stahování ${state.selectedEpisodes.length} dílů...`, 'info');
+    
+    try {
+        const response = await fetch(`${API_CONFIG.prehrajto}/download/series`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(downloadData)
+        });
+        
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || 'Nepodařilo se zahájit stahování');
+        }
+        
+        const jobId = result.jobId;
+        
+        // Create HUD card for series download
+        createSeriesHudCard(jobId, state.series.title, state.selectedEpisodes.length);
+        
+        // Start SSE for progress
+        const es = new EventSource(`${API_CONFIG.prehrajto}/download/progress/${encodeURIComponent(jobId)}`);
+        
+        es.onmessage = (ev) => {
+            let data;
+            try { data = JSON.parse(ev.data); } catch { return; }
+            
+            handleSeriesDownloadProgress(jobId, data);
+        };
+        
+        es.onerror = () => {
+            console.warn('SSE connection error for series download');
+        };
+        
+        showToast('Stahování seriálu zahájeno!', 'success');
+        
+        // Hide episode selection UI
+        document.getElementById('episodes-selection').style.display = 'none';
+        
+    } catch (error) {
+        console.error('Series download error:', error);
+        showToast(`Chyba: ${error.message}`, 'error');
+    }
+}
+
+/**
+ * Create HUD card for series download
+ */
+function createSeriesHudCard(jobId, seriesTitle, episodeCount) {
+    const hud = ensureHud();
+    
+    const card = document.createElement('div');
+    card.className = 'download-hud-card series-download';
+    card.dataset.jobId = jobId;
+    
+    card.innerHTML = `
+        <div class="download-hud-top">
+            <div style="min-width: 0;">
+                <div class="download-hud-title">${escapeHtml(seriesTitle)}</div>
+                <div class="download-hud-sub" data-sub>${episodeCount} dílů</div>
+            </div>
+            <div class="download-hud-actions">
+                <button class="download-hud-iconbtn danger" data-cancel title="Zrušit a smazat">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="download-hud-episode" data-current-episode>
+            <span class="episode-badge" data-episode-badge>S01E01</span>
+            <span data-episode-name>Inicializuji...</span>
+        </div>
+        
+        <div class="download-hud-bar">
+            <div class="download-hud-fill" data-fill></div>
+        </div>
+        
+        <div class="download-hud-meta">
+            <div><span class="download-hud-status" data-status>ČEKÁM</span></div>
+            <div data-meta>0% • 0 B/s • ETA —</div>
+        </div>
+        
+        <div class="download-hud-episodes-progress" data-episodes-progress>
+            0 / ${episodeCount} dílů staženo
+        </div>
+    `;
+    
+    // Cancel button handler
+    card.querySelector('[data-cancel]').addEventListener('click', async () => {
+        try {
+            const r = await fetch(`${API_CONFIG.prehrajto}/download/cancel/${encodeURIComponent(jobId)}`, {
+                method: 'POST'
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.success) throw new Error(j.error || 'Cancel failed');
+            
+            showToast('Stahování seriálu zrušeno', 'warning');
+        } catch (e) {
+            showToast(`Nepodařilo se zrušit: ${e.message}`, 'error');
+        }
+    });
+    
+    hud.prepend(card);
+    return card;
+}
+
+/**
+ * Handle series download progress updates
+ */
+function handleSeriesDownloadProgress(jobId, data) {
+    const card = document.querySelector(`.download-hud-card[data-job-id="${jobId}"]`);
+    if (!card) return;
+    
+    const fill = card.querySelector('[data-fill]');
+    const sub = card.querySelector('[data-sub]');
+    const statusEl = card.querySelector('[data-status]');
+    const meta = card.querySelector('[data-meta]');
+    const episodeBadge = card.querySelector('[data-episode-badge]');
+    const episodeName = card.querySelector('[data-episode-name]');
+    const episodesProgress = card.querySelector('[data-episodes-progress]');
+    
+    if (data.type === 'episode-start') {
+        episodeBadge.textContent = `S${data.season.toString().padStart(2, '0')}E${data.episode.toString().padStart(2, '0')}`;
+        episodeName.textContent = data.episodeTitle || 'Stahování...';
+        statusEl.textContent = 'STAHUJU';
+        statusEl.classList.remove('ok', 'err');
+    }
+    
+    if (data.type === 'progress') {
+        const pct = data.progress || 0;
+        fill.style.width = `${pct}%`;
+        
+        const speed = data.speedBps || 0;
+        const eta = data.etaSec;
+        
+        meta.textContent = `${Math.round(pct)}% • ${formatBytes(speed)}/s • ${formatSeconds(eta)}`;
+        sub.textContent = `${formatBytes(data.downloadedBytes)} / ${formatBytes(data.totalBytes)}`;
+    }
+    
+    if (data.type === 'episode-done') {
+        episodesProgress.textContent = `${data.completedEpisodes} / ${data.totalEpisodes} dílů staženo`;
+    }
+    
+    if (data.type === 'done') {
+        fill.style.width = '100%';
+        statusEl.textContent = 'HOTOVO';
+        statusEl.classList.add('ok');
+        statusEl.classList.remove('err');
+        meta.textContent = '100%';
+        episodesProgress.textContent = `${data.totalEpisodes} / ${data.totalEpisodes} dílů staženo`;
+        sub.textContent = '✅ Všechny díly staženy';
+        
+        showToast('✅ Seriál úspěšně stažen!', 'success', 5000);
+    }
+    
+    if (data.type === 'error') {
+        statusEl.textContent = 'CHYBA';
+        statusEl.classList.add('err');
+        statusEl.classList.remove('ok');
+        sub.textContent = data.error || 'Stahování selhalo';
+        
+        showToast(`Chyba: ${data.error}`, 'error');
+    }
+    
+    if (data.type === 'canceled') {
+        statusEl.textContent = 'ZRUŠENO';
+        statusEl.classList.add('err');
+        statusEl.classList.remove('ok');
+        sub.textContent = 'Stahování zrušeno';
+    }
 }
 
 /**
