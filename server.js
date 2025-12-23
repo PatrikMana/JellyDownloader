@@ -23,7 +23,30 @@ const PORT = process.env.PORT || 3000;
 const OMDB_API_KEY = process.env.OMDB_API_KEY || 'your-api-key-here'; // Get from http://www.omdbapi.com/apikey.aspx
 const TMDB_API_KEY = process.env.TMDB_API_KEY || null; // Get from https://www.themoviedb.org/settings/api
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
-const JELLYFIN_DIR = process.env.JELLYFIN_DIR || null; // Set to your Jellyfin media path, e.g., '/path/to/jellyfin/movies'
+
+// Download paths - can be configured separately for movies and series
+const ENV_PATH = path.join(__dirname, '.env');
+
+function getDownloadPaths() {
+    // Re-read .env to get latest values
+    const envContent = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
+    const envLines = envContent.split('\n');
+    const env = {};
+    envLines.forEach(line => {
+        const match = line.match(/^([^=]+)=(.*)$/);
+        if (match) {
+            env[match[1].trim()] = match[2].trim();
+        }
+    });
+    
+    return {
+        movies: env.MOVIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'movies'),
+        series: env.SERIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'tvshows')
+    };
+}
+
+// Legacy support
+const JELLYFIN_DIR = process.env.JELLYFIN_DIR || null;
 
 // Ensure downloads directory exists
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -1354,14 +1377,15 @@ function generateJellyfinFilename(title, imdbData, type = 'movie', season = null
 
 // Helper function to get Jellyfin directory structure
 function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
-    const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+    const paths = getDownloadPaths();
+    
     // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
     const rawTitle = imdbData?.Title || title || 'Unknown';
     const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
     
     if (type === 'movie') {
-        // Filmy se ukládají přímo do movies/ bez podsložky
-        return path.join(baseDir, 'movies');
+        // Filmy se ukládají přímo do movies složky
+        return paths.movies;
     } else if (type === 'series') {
         const imdbId = imdbData?.imdbID || '';
         const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
@@ -1369,11 +1393,11 @@ function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
         
         if (season !== null) {
             const seasonDir = `Season ${String(season).padStart(2, '0')}`;
-            return path.join(baseDir, 'tvshows', seriesDir, seasonDir);
+            return path.join(paths.series, seriesDir, seasonDir);
         }
-        return path.join(baseDir, 'tvshows', seriesDir);
+        return path.join(paths.series, seriesDir);
     }
-    return baseDir;
+    return paths.movies;
 }
 
 // Series Download endpoint - downloads multiple episodes
@@ -1401,10 +1425,10 @@ app.post('/api/download/series', async (req, res) => {
         job.status = 'downloading';
         job.abortController = new AbortController();
         
-        const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+        const paths = getDownloadPaths();
         const cleanSeriesTitle = seriesTitle.replace(/[<>:"/\\|?*]/g, '').trim();
         const seriesSuffix = seriesImdbId ? ` [imdbid-${seriesImdbId}]` : '';
-        const seriesDir = path.join(baseDir, 'tvshows', `${cleanSeriesTitle}${seriesSuffix}`);
+        const seriesDir = path.join(paths.series, `${cleanSeriesTitle}${seriesSuffix}`);
         
         job.downloadDir = seriesDir;
         
@@ -1897,6 +1921,173 @@ function filesizeToMB(filesizeStr) {
     default: return 0;
   }
 }
+
+// ============================================
+// SETTINGS API
+// ============================================
+
+// Get current settings
+app.get('/api/settings', (req, res) => {
+    try {
+        const paths = getDownloadPaths();
+        res.json({
+            success: true,
+            settings: {
+                moviesDir: paths.movies,
+                seriesDir: paths.series
+            }
+        });
+    } catch (error) {
+        console.error('Error reading settings:', error);
+        res.status(500).json({ success: false, error: 'Chyba při čtení nastavení' });
+    }
+});
+
+// Save settings
+app.post('/api/settings', (req, res) => {
+    try {
+        const { moviesDir, seriesDir } = req.body;
+        
+        if (!moviesDir || !seriesDir) {
+            return res.status(400).json({ success: false, error: 'Musíte zadat obě cesty' });
+        }
+        
+        // Read existing .env content
+        let envContent = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
+        const envLines = envContent.split('\n');
+        
+        // Parse existing env vars - preserve order and handle values with = signs
+        const envVars = new Map();
+        envLines.forEach(line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine && !trimmedLine.startsWith('#')) {
+                const eqIndex = trimmedLine.indexOf('=');
+                if (eqIndex > 0) {
+                    const key = trimmedLine.substring(0, eqIndex).trim();
+                    const value = trimmedLine.substring(eqIndex + 1);
+                    envVars.set(key, value);
+                }
+            }
+        });
+        
+        // Update paths
+        envVars.set('MOVIES_DIR', moviesDir);
+        envVars.set('SERIES_DIR', seriesDir);
+        
+        // Rebuild .env content preserving order
+        const newEnvContent = Array.from(envVars.entries())
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+        
+        // Write back to .env
+        fs.writeFileSync(ENV_PATH, newEnvContent, 'utf8');
+        
+        // Create directories if they don't exist
+        if (!fs.existsSync(moviesDir)) {
+            fs.mkdirSync(moviesDir, { recursive: true });
+        }
+        if (!fs.existsSync(seriesDir)) {
+            fs.mkdirSync(seriesDir, { recursive: true });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Nastavení bylo uloženo',
+            settings: {
+                moviesDir,
+                seriesDir
+            }
+        });
+    } catch (error) {
+        console.error('Error saving settings:', error);
+        res.status(500).json({ success: false, error: 'Chyba při ukládání nastavení: ' + error.message });
+    }
+});
+
+// Browse directory endpoint
+app.get('/api/browse-directory', (req, res) => {
+    try {
+        let dirPath = req.query.path || '';
+        
+        // If no path provided, return drives on Windows or root on Unix
+        if (!dirPath) {
+            if (process.platform === 'win32') {
+                // Get Windows drives
+                const { execSync } = require('child_process');
+                try {
+                    const output = execSync('wmic logicaldisk get name', { encoding: 'utf8' });
+                    const drives = output.split('\n')
+                        .map(line => line.trim())
+                        .filter(line => /^[A-Z]:$/.test(line))
+                        .map(drive => ({
+                            name: drive,
+                            path: drive + '\\',
+                            isDirectory: true
+                        }));
+                    return res.json({
+                        success: true,
+                        currentPath: '',
+                        parentPath: null,
+                        items: drives
+                    });
+                } catch {
+                    dirPath = 'C:\\';
+                }
+            } else {
+                dirPath = '/';
+            }
+        }
+        
+        // Normalize path
+        dirPath = path.resolve(dirPath);
+        
+        // Check if directory exists
+        if (!fs.existsSync(dirPath)) {
+            return res.status(404).json({ success: false, error: 'Složka neexistuje' });
+        }
+        
+        // Check if it's a directory
+        const stats = fs.statSync(dirPath);
+        if (!stats.isDirectory()) {
+            return res.status(400).json({ success: false, error: 'Cesta není složka' });
+        }
+        
+        // Read directory contents
+        const items = [];
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        
+        for (const entry of entries) {
+            // Skip hidden files/folders (starting with .)
+            if (entry.name.startsWith('.')) continue;
+            
+            if (entry.isDirectory()) {
+                items.push({
+                    name: entry.name,
+                    path: path.join(dirPath, entry.name),
+                    isDirectory: true
+                });
+            }
+        }
+        
+        // Sort alphabetically
+        items.sort((a, b) => a.name.localeCompare(b.name));
+        
+        // Get parent path
+        const parentPath = path.dirname(dirPath);
+        const hasParent = parentPath !== dirPath;
+        
+        res.json({
+            success: true,
+            currentPath: dirPath,
+            parentPath: hasParent ? parentPath : null,
+            items: items
+        });
+        
+    } catch (error) {
+        console.error('Error browsing directory:', error);
+        res.status(500).json({ success: false, error: 'Chyba při procházení složky: ' + error.message });
+    }
+});
 
 // Spuštění serveru
 app.listen(PORT, () => {

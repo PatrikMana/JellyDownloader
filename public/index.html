@@ -20,6 +20,11 @@
                 <a href="#" class="nav-link active" data-mode="movie">FILMY</a>
                 <a href="#" class="nav-link" data-mode="series">SERIÁLY</a>
             </div>
+            <div class="nav-actions">
+                <button class="nav-settings-btn" id="settings-btn" title="Nastavení">
+                    <i class="fas fa-cog"></i>
+                </button>
+            </div>
         </div>
     </nav>
 
@@ -190,6 +195,75 @@
 
     <!-- Toast Container -->
     <div class="toast-container" id="toast-container"></div>
+
+    <!-- File Browser Modal -->
+    <div class="modal-overlay" id="file-browser-modal" style="display: none;">
+        <div class="modal-content file-browser-modal">
+            <div class="modal-header">
+                <h2><i class="fas fa-folder-open"></i> Vybrat složku</h2>
+                <button class="modal-close" id="file-browser-close">&times;</button>
+            </div>
+            <div class="file-browser-path">
+                <button class="path-up-btn" id="path-up-btn" title="Nahoru">
+                    <i class="fas fa-level-up-alt"></i>
+                </button>
+                <input type="text" class="path-input" id="current-path-input" readonly>
+            </div>
+            <div class="file-browser-content" id="file-browser-content">
+                <!-- Folders will be listed here -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="file-browser-cancel">Zrušit</button>
+                <button class="btn btn-primary" id="file-browser-select">
+                    <i class="fas fa-check"></i> Vybrat tuto složku
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settings-modal" style="display: none;">
+        <div class="modal-content settings-modal">
+            <div class="modal-header">
+                <h2><i class="fas fa-cog"></i> Nastavení</h2>
+                <button class="modal-close" id="settings-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <label class="settings-label">
+                        <i class="fas fa-film"></i>
+                        Cesta pro filmy
+                    </label>
+                    <div class="settings-input-row">
+                        <input type="text" class="settings-input" id="movies-dir-input" placeholder="např. C:\Jellyfin\Movies">
+                        <button class="browse-btn" data-target="movies-dir-input" title="Vybrat složku">
+                            <i class="fas fa-folder-open"></i>
+                        </button>
+                    </div>
+                    <p class="settings-hint">Složka kam se budou ukládat stažené filmy</p>
+                </div>
+                <div class="settings-group">
+                    <label class="settings-label">
+                        <i class="fas fa-tv"></i>
+                        Cesta pro seriály
+                    </label>
+                    <div class="settings-input-row">
+                        <input type="text" class="settings-input" id="series-dir-input" placeholder="např. C:\Jellyfin\TVShows">
+                        <button class="browse-btn" data-target="series-dir-input" title="Vybrat složku">
+                            <i class="fas fa-folder-open"></i>
+                        </button>
+                    </div>
+                    <p class="settings-hint">Složka kam se budou ukládat stažené seriály</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="settings-cancel">Zrušit</button>
+                <button class="btn btn-primary" id="settings-save">
+                    <i class="fas fa-save"></i> Uložit
+                </button>
+            </div>
+        </div>
+    </div>
 
 
     <script src="app.js"></script>

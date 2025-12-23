@@ -2566,6 +2566,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
+    // Settings modal functionality
+    initSettingsModal();
+    
+    // File browser functionality
+    initFileBrowser();
+    
     // Initialize
     switchMode('movie');
     setLanguage('cz');
@@ -2831,3 +2837,278 @@ window.selectSeries = selectSeries;
 window.continueWithSelectedSeasons = continueWithSelectedSeasons;
 window.selectEpisode = selectEpisode;
 window.downloadSelectedEpisodes = downloadSelectedEpisodes;
+
+// ===============================================
+// SETTINGS MODAL FUNCTIONS
+// ===============================================
+
+/**
+ * Initialize settings modal functionality
+ */
+function initSettingsModal() {
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsClose = document.getElementById('settings-close');
+    const settingsCancel = document.getElementById('settings-cancel');
+    const settingsSave = document.getElementById('settings-save');
+    
+    // Open modal
+    settingsBtn?.addEventListener('click', () => {
+        openSettingsModal();
+    });
+    
+    // Close modal
+    settingsClose?.addEventListener('click', () => {
+        closeSettingsModal();
+    });
+    
+    settingsCancel?.addEventListener('click', () => {
+        closeSettingsModal();
+    });
+    
+    // Close on overlay click
+    settingsModal?.addEventListener('click', (e) => {
+        if (e.target === settingsModal) {
+            closeSettingsModal();
+        }
+    });
+    
+    // Close on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && settingsModal?.style.display !== 'none') {
+            closeSettingsModal();
+        }
+    });
+    
+    // Save settings
+    settingsSave?.addEventListener('click', () => {
+        saveSettings();
+    });
+}
+
+/**
+ * Open settings modal and load current settings
+ */
+async function openSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    const moviesDirInput = document.getElementById('movies-dir-input');
+    const seriesDirInput = document.getElementById('series-dir-input');
+    
+    try {
+        // Load current settings
+        const response = await fetch('/api/settings');
+        const data = await response.json();
+        
+        if (data.success) {
+            moviesDirInput.value = data.settings.moviesDir || '';
+            seriesDirInput.value = data.settings.seriesDir || '';
+        }
+    } catch (error) {
+        console.error('Error loading settings:', error);
+        showToast('Chyba při načítání nastavení', 'error');
+    }
+    
+    modal.style.display = 'flex';
+}
+
+/**
+ * Close settings modal
+ */
+function closeSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    modal.style.display = 'none';
+}
+
+/**
+ * Save settings to server
+ */
+async function saveSettings() {
+    const moviesDirInput = document.getElementById('movies-dir-input');
+    const seriesDirInput = document.getElementById('series-dir-input');
+    
+    const moviesDir = moviesDirInput.value.trim();
+    const seriesDir = seriesDirInput.value.trim();
+    
+    if (!moviesDir || !seriesDir) {
+        showToast('Vyplňte obě cesty', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ moviesDir, seriesDir })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('Nastavení bylo uloženo', 'success');
+            closeSettingsModal();
+        } else {
+            showToast(data.error || 'Chyba při ukládání', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving settings:', error);
+        showToast('Chyba při ukládání nastavení', 'error');
+    }
+}
+
+// ===============================================
+// FILE BROWSER MODAL FUNCTIONS
+// ===============================================
+
+let fileBrowserTargetInput = null;
+let fileBrowserCurrentPath = '';
+let fileBrowserParentPath = null;
+
+/**
+ * Initialize file browser modal functionality
+ */
+function initFileBrowser() {
+    const modal = document.getElementById('file-browser-modal');
+    const closeBtn = document.getElementById('file-browser-close');
+    const cancelBtn = document.getElementById('file-browser-cancel');
+    const selectBtn = document.getElementById('file-browser-select');
+    const upBtn = document.getElementById('path-up-btn');
+    
+    // Browse buttons
+    document.querySelectorAll('.browse-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetId = btn.dataset.target;
+            openFileBrowser(targetId);
+        });
+    });
+    
+    // Close modal
+    closeBtn?.addEventListener('click', closeFileBrowser);
+    cancelBtn?.addEventListener('click', closeFileBrowser);
+    
+    // Close on overlay click
+    modal?.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeFileBrowser();
+        }
+    });
+    
+    // Navigate up
+    upBtn?.addEventListener('click', () => {
+        if (fileBrowserParentPath !== null) {
+            browseDirectory(fileBrowserParentPath);
+        }
+    });
+    
+    // Select folder
+    selectBtn?.addEventListener('click', () => {
+        if (fileBrowserCurrentPath && fileBrowserTargetInput) {
+            const targetInput = document.getElementById(fileBrowserTargetInput);
+            if (targetInput) {
+                targetInput.value = fileBrowserCurrentPath;
+            }
+            closeFileBrowser();
+        }
+    });
+}
+
+/**
+ * Open file browser modal
+ */
+function openFileBrowser(targetInputId) {
+    fileBrowserTargetInput = targetInputId;
+    
+    // Get current value from target input as starting path
+    const targetInput = document.getElementById(targetInputId);
+    const startPath = targetInput?.value || '';
+    
+    const modal = document.getElementById('file-browser-modal');
+    modal.style.display = 'flex';
+    
+    // Browse to starting path or root
+    browseDirectory(startPath);
+}
+
+/**
+ * Close file browser modal
+ */
+function closeFileBrowser() {
+    const modal = document.getElementById('file-browser-modal');
+    modal.style.display = 'none';
+    fileBrowserTargetInput = null;
+}
+
+/**
+ * Browse directory and display contents
+ */
+async function browseDirectory(dirPath) {
+    const content = document.getElementById('file-browser-content');
+    const pathInput = document.getElementById('current-path-input');
+    const upBtn = document.getElementById('path-up-btn');
+    
+    // Show loading
+    content.innerHTML = `
+        <div class="file-browser-loading">
+            <i class="fas fa-spinner"></i>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch(`/api/browse-directory?path=${encodeURIComponent(dirPath)}`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Chyba při načítání složky');
+        }
+        
+        fileBrowserCurrentPath = data.currentPath;
+        fileBrowserParentPath = data.parentPath;
+        
+        // Update path input
+        pathInput.value = data.currentPath || 'Tento počítač';
+        
+        // Update up button
+        upBtn.disabled = data.parentPath === null;
+        
+        // Display folders
+        if (data.items.length === 0) {
+            content.innerHTML = `
+                <div class="file-browser-empty">
+                    <i class="fas fa-folder-open"></i>
+                    <p>Prázdná složka</p>
+                </div>
+            `;
+        } else {
+            content.innerHTML = data.items.map(item => `
+                <div class="folder-item ${!data.currentPath ? 'drive' : ''}" 
+                     data-path="${escapeHtml(item.path)}"
+                     ondblclick="browseDirectory('${escapeHtml(item.path).replace(/\\/g, '\\\\')}')">
+                    <i class="fas ${!data.currentPath ? 'fa-hdd' : 'fa-folder'}"></i>
+                    <span class="folder-name">${escapeHtml(item.name)}</span>
+                </div>
+            `).join('');
+        }
+        
+    } catch (error) {
+        console.error('Error browsing directory:', error);
+        content.innerHTML = `
+            <div class="file-browser-empty">
+                <i class="fas fa-exclamation-triangle"></i>
+                <p>${error.message}</p>
+            </div>
+        `;
+    }
+}
+
+/**
+ * Escape HTML special characters
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Make browseDirectory available globally for ondblclick
+window.browseDirectory = browseDirectory;
