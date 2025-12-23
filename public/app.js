@@ -861,9 +861,37 @@ async function proceedWithSelectedEpisodes() {
     console.log('📺 Selected episodes:', selected);
     console.log('📺 Series info:', window.selectedSeries);
     
+    // First, try to get Czech title
+    showToast('Načítám český název seriálu...', 'info');
+    
+    let czechTitle = window.selectedSeries.title; // Default to original
+    let originalTitle = window.selectedSeries.title;
+    
+    try {
+        const response = await fetch(`${API_CONFIG.prehrajto}/tmdb/czech-title/${window.selectedSeries.imdbId}`);
+        const data = await response.json();
+        
+        if (data.success && data.czechTitle) {
+            czechTitle = data.czechTitle;
+            originalTitle = data.originalTitle || window.selectedSeries.title;
+            console.log(`✅ Got Czech title: "${czechTitle}" (original: "${originalTitle}")`);
+        }
+    } catch (e) {
+        console.warn('Could not fetch Czech title:', e);
+    }
+    
+    // Show dialog to confirm/edit search title
+    const searchTitle = await showSearchTitleDialog(originalTitle, czechTitle);
+    
+    if (!searchTitle) {
+        showToast('Vyhledávání zrušeno', 'info');
+        return;
+    }
+    
     // Initialize series download state
     window.seriesDownload = {
         series: window.selectedSeries,
+        searchTitle: searchTitle, // Title to use for prehrajto search
         episodes: selected,
         currentIndex: 0,
         selectedEpisodes: [], // Will store { episode, prehrajtoResult, selectedQualityUrl }
@@ -875,6 +903,118 @@ async function proceedWithSelectedEpisodes() {
     
     // Start with first episode
     await searchNextEpisode();
+}
+
+/**
+ * Show dialog to confirm/edit search title for prehrajto
+ */
+function showSearchTitleDialog(originalTitle, czechTitle) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'quality-modal-overlay';
+        
+        const modal = document.createElement('div');
+        modal.className = 'quality-modal search-title-modal';
+        
+        modal.innerHTML = `
+            <div class="quality-modal-header">
+                <h2><i class="fas fa-search"></i> NÁZEV PRO VYHLEDÁVÁNÍ</h2>
+                <button class="quality-modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="quality-modal-body">
+                <p class="search-title-info">
+                    Zadejte název seriálu, pod kterým se bude vyhledávat na prehrajto.cz
+                </p>
+                
+                <div class="search-title-original">
+                    <label>Originální název:</label>
+                    <span>${escapeHtml(originalTitle)}</span>
+                </div>
+                
+                ${czechTitle !== originalTitle ? `
+                <div class="search-title-czech">
+                    <label>Český název (TMDB):</label>
+                    <span>${escapeHtml(czechTitle)}</span>
+                </div>
+                ` : ''}
+                
+                <div class="search-title-input-group">
+                    <label for="search-title-input">Název pro vyhledávání:</label>
+                    <input type="text" id="search-title-input" class="search-input" 
+                           value="${escapeHtml(czechTitle)}" 
+                           placeholder="Zadejte název...">
+                </div>
+                
+                <div class="search-title-suggestions">
+                    <label>Rychlý výběr:</label>
+                    <div class="search-title-buttons">
+                        ${czechTitle !== originalTitle ? `
+                        <button class="btn btn-secondary" onclick="document.getElementById('search-title-input').value='${escapeHtml(czechTitle)}'">
+                            ${escapeHtml(czechTitle)}
+                        </button>
+                        ` : ''}
+                        <button class="btn btn-secondary" onclick="document.getElementById('search-title-input').value='${escapeHtml(originalTitle)}'">
+                            ${escapeHtml(originalTitle)}
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="search-title-actions">
+                    <button class="btn btn-secondary" id="cancel-search-title">
+                        <i class="fas fa-times"></i> ZRUŠIT
+                    </button>
+                    <button class="btn btn-primary" id="confirm-search-title">
+                        <i class="fas fa-check"></i> POKRAČOVAT
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        
+        const input = modal.querySelector('#search-title-input');
+        input.focus();
+        input.select();
+        
+        // Close button
+        modal.querySelector('.quality-modal-close').addEventListener('click', () => {
+            overlay.remove();
+            resolve(null);
+        });
+        
+        // Cancel button
+        modal.querySelector('#cancel-search-title').addEventListener('click', () => {
+            overlay.remove();
+            resolve(null);
+        });
+        
+        // Confirm button
+        modal.querySelector('#confirm-search-title').addEventListener('click', () => {
+            const value = input.value.trim();
+            overlay.remove();
+            resolve(value || null);
+        });
+        
+        // Enter key
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const value = input.value.trim();
+                overlay.remove();
+                resolve(value || null);
+            }
+        });
+        
+        // Click outside
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+                resolve(null);
+            }
+        });
+    });
 }
 
 /**
@@ -890,6 +1030,7 @@ function showEpisodeSelectionUI() {
     episodesContainer.innerHTML = `
         <div class="episode-selection-header">
             <h3>VÝBĚR KVALITY PRO JEDNOTLIVÉ DÍLY</h3>
+            <p class="episode-selection-subtitle">Vyhledávání: <strong>${escapeHtml(window.seriesDownload.searchTitle)}</strong></p>
             <p class="episode-selection-progress">
                 Díl <span id="current-episode-num">1</span> z <span id="total-episodes-num">${window.seriesDownload.totalEpisodes}</span>
             </p>
@@ -938,7 +1079,7 @@ async function searchNextEpisode() {
     }
     
     const episode = state.episodes[state.currentIndex];
-    const seriesTitle = state.series.title;
+    const searchTitle = state.searchTitle; // Use the search title (Czech or custom)
     
     // Update progress
     document.getElementById('current-episode-num').textContent = state.currentIndex + 1;
@@ -946,7 +1087,7 @@ async function searchNextEpisode() {
     // Build search query: "Název seriálu sXXeXX"
     const seasonStr = episode.season.toString().padStart(2, '0');
     const episodeStr = episode.episode.toString().padStart(2, '0');
-    const searchQuery = `${seriesTitle} s${seasonStr}e${episodeStr}`;
+    const searchQuery = `${searchTitle} s${seasonStr}e${episodeStr}`;
     
     console.log(`🔍 Searching for episode: ${searchQuery}`);
     
@@ -967,7 +1108,7 @@ async function searchNextEpisode() {
         
         if (results.length === 0) {
             // Try alternative search format
-            const altQuery = `${seriesTitle} ${episode.season}x${episodeStr}`;
+            const altQuery = `${searchTitle} ${episode.season}x${episodeStr}`;
             console.log(`🔍 No results, trying alternative: ${altQuery}`);
             const altResults = await searchPrehrajto(altQuery);
             

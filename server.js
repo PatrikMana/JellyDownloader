@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 3000;
 
 // IMDB API Configuration
 const OMDB_API_KEY = process.env.OMDB_API_KEY || 'your-api-key-here'; // Get from http://www.omdbapi.com/apikey.aspx
+const TMDB_API_KEY = process.env.TMDB_API_KEY || null; // Get from https://www.themoviedb.org/settings/api
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
 const JELLYFIN_DIR = process.env.JELLYFIN_DIR || null; // Set to your Jellyfin media path, e.g., '/path/to/jellyfin/movies'
 
@@ -710,6 +711,72 @@ app.get('/api/imdb/series/:imdbId/seasons', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Nepodařilo se získat sezóny seriálu'
+        });
+    }
+});
+
+// Get Czech title for a series using TMDB API
+app.get('/api/tmdb/czech-title/:imdbId', async (req, res) => {
+    try {
+        const imdbId = req.params.imdbId;
+        
+        if (!TMDB_API_KEY) {
+            console.log('⚠️ TMDB API key not configured, cannot fetch Czech title');
+            return res.json({ success: false, error: 'TMDB API není nakonfigurováno' });
+        }
+        
+        // First, find the TMDB ID using IMDB ID
+        const findUrl = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
+        
+        console.log(`🔍 Looking up TMDB ID for IMDB: ${imdbId}`);
+        const findResponse = await axios.get(findUrl, { timeout: 10000 });
+        
+        const tvResults = findResponse.data.tv_results || [];
+        if (tvResults.length === 0) {
+            console.log('❌ No TMDB results found for IMDB ID:', imdbId);
+            return res.json({ success: false, error: 'Seriál nebyl nalezen v TMDB' });
+        }
+        
+        const tmdbId = tvResults[0].id;
+        const originalTitle = tvResults[0].name;
+        
+        // Now get Czech translation
+        const detailsUrl = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=cs-CZ`;
+        const detailsResponse = await axios.get(detailsUrl, { timeout: 10000 });
+        
+        const czechTitle = detailsResponse.data.name;
+        
+        // Also try to get alternative titles for more options
+        const altTitlesUrl = `https://api.themoviedb.org/3/tv/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+        let alternativeTitles = [];
+        
+        try {
+            const altResponse = await axios.get(altTitlesUrl, { timeout: 10000 });
+            alternativeTitles = (altResponse.data.results || [])
+                .filter(t => t.iso_3166_1 === 'CZ' || t.iso_3166_1 === 'SK')
+                .map(t => t.title);
+        } catch (e) {
+            // Ignore alternative titles error
+        }
+        
+        console.log(`✅ Czech title for "${originalTitle}": "${czechTitle}"`);
+        if (alternativeTitles.length > 0) {
+            console.log(`   Alternative titles: ${alternativeTitles.join(', ')}`);
+        }
+        
+        res.json({
+            success: true,
+            originalTitle: originalTitle,
+            czechTitle: czechTitle,
+            alternativeTitles: alternativeTitles,
+            tmdbId: tmdbId
+        });
+        
+    } catch (error) {
+        console.error('Chyba při získávání českého názvu:', error.message);
+        res.status(500).json({
+            success: false,
+            error: 'Nepodařilo se získat český název'
         });
     }
 });

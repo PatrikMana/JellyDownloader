@@ -59,7 +59,32 @@ Aplikace funguje i bez klíče, ale:
 
 ---
 
-## 🎯 (Volitelné) Nastavení Jellyfin adresáře
+## � (Volitelné) TMDB API - České názvy seriálů
+
+Pro automatické vyhledávání seriálů pod českými názvy na prehrajto.cz:
+
+1. Jděte na: **https://www.themoviedb.org/settings/api**
+2. Vytvořte účet (zdarma)
+3. Požádejte o API klíč (Developer)
+4. Zkopírujte API klíč (v3 auth)
+
+V `.env` souboru přidejte:
+
+```env
+TMDB_API_KEY=your-tmdb-api-key-here
+```
+
+**Příklad:**
+```env
+OMDB_API_KEY=3f8a1b2c
+TMDB_API_KEY=abc123def456789
+```
+
+S TMDB API klíčem aplikace automaticky najde české názvy seriálů (např. "Gilmore Girls" → "Gilmorova děvčata").
+
+---
+
+## �🎯 (Volitelné) Nastavení Jellyfin adresáře
 
 V `.env` souboru můžete také nastavit cestu k Jellyfin knihovně:
 
