@@ -1694,6 +1694,65 @@ async function getIMDBInfo(title, year = null, originalQuery = null) {
 }
 
 /**
+ * Get IMDB information by IMDB ID directly
+ * @param {string} imdbId - IMDB ID (e.g., tt0120338)
+ */
+async function getIMDBInfoById(imdbId) {
+    try {
+        console.log('🔎 [IMDB][BY-ID] imdbId="%s"', imdbId);
+        
+        const response = await fetch(`${API_CONFIG.prehrajto}/imdb-by-id/${encodeURIComponent(imdbId)}`);
+        const data = await response.json();
+        
+        if (data.success && data.data) {
+            const d = data.data;
+            console.log('✅ [IMDB][BY-ID] found="%s" (%s)', d.Title, d.Year);
+            return d;
+        }
+        return null;
+    } catch (error) {
+        console.error('💥 [IMDB][BY-ID] error="%s"', error.message);
+        return null;
+    }
+}
+
+/**
+ * Get original title from Czech title using TMDB
+ * @param {string} czechTitle - Czech movie title
+ * @param {string|null} year - Year (optional)
+ */
+async function getOriginalTitleFromTMDB(czechTitle, year = null) {
+    try {
+        console.log('🔍 [TMDB] Looking up original title for: "%s"', czechTitle);
+        
+        let url = `${API_CONFIG.prehrajto}/tmdb/original-title?title=${encodeURIComponent(czechTitle)}`;
+        if (year) {
+            url += `&year=${year}`;
+        }
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.success) {
+            console.log('✅ [TMDB] Original title: "%s" -> "%s" [%s]', czechTitle, data.originalTitle, data.imdbId || 'no imdb');
+            return {
+                originalTitle: data.originalTitle,
+                czechTitle: data.czechTitle,
+                year: data.year,
+                imdbId: data.imdbId,
+                tmdbId: data.tmdbId
+            };
+        }
+        
+        console.log('❌ [TMDB] No results for: "%s"', czechTitle);
+        return null;
+    } catch (error) {
+        console.error('💥 [TMDB] Error:', error.message);
+        return null;
+    }
+}
+
+/**
  * Get video data from prehrajto.cz (URL + all available qualities)
  */
 async function getVideoData(moviePath) {
@@ -2174,9 +2233,31 @@ async function selectForDownload(moviePath, movieTitle) {
             showToast('⚠️ Žádné kvality nenalezeny, použiji fallback URL', 'warning');
         }
         
-        // KROK 3: Teď až získej IMDB info a ostatní metadata
-        showToast('Získávám metadata z IMDB...', 'info');
-        const imdbInfo = await getIMDBInfo(movieTitle, null, lastSearchQuery);
+        // KROK 3: Pokud je jazyk čeština, nejdřív najdi originální název přes TMDB
+        let searchTitle = lastSearchQuery || movieTitle;
+        let imdbInfo = null;
+        
+        if (currentLanguage === 'cz') {
+            showToast('Hledám originální název filmu...', 'info');
+            const originalTitleData = await getOriginalTitleFromTMDB(searchTitle);
+            
+            if (originalTitleData && originalTitleData.originalTitle) {
+                console.log(`🎬 Found original title: "${originalTitleData.originalTitle}" for Czech: "${searchTitle}"`);
+                searchTitle = originalTitleData.originalTitle;
+                
+                // Pokud TMDB vrátil i IMDB ID, použijeme ho přímo
+                if (originalTitleData.imdbId) {
+                    showToast('Získávám metadata z IMDB...', 'info');
+                    imdbInfo = await getIMDBInfoById(originalTitleData.imdbId);
+                }
+            }
+        }
+        
+        // KROK 4: Pokud nemáme IMDB info, získej ho pomocí názvu
+        if (!imdbInfo) {
+            showToast('Získávám metadata z IMDB...', 'info');
+            imdbInfo = await getIMDBInfo(searchTitle, null, lastSearchQuery);
+        }
         
         // Generate filename
         const filename = generateJellyfinName({ title: movieTitle }, imdbInfo);
