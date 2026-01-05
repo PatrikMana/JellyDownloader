@@ -17,7 +17,6 @@ let lastSearchQuery = ''; // Uchová poslední hledaný výraz od uživatele
 // API Configuration
 const API_CONFIG = {
     imdb: 'https://www.omdbapi.com/?apikey=YOUR_API_KEY',
-    titulky: 'https://titulky.com',
     prehrajto: '/api'
 };
 
@@ -1785,45 +1784,6 @@ async function getVideoUrl(moviePath) {
 }
 
 /**
- * Download subtitles from titulky.com
- */
-async function downloadSubtitles(title, year) {
-    try {
-        console.log('📝 Searching subtitles for:', title, year);
-        showToast('Vyhledávám titulky...', 'info');
-        
-        const yearParam = year ? `/${year}` : '';
-        const response = await fetch(`${API_CONFIG.prehrajto}/subtitles/${encodeURIComponent(title)}${yearParam}`);
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Subtitles API chyba');
-        }
-        
-        if (data.success && data.subtitles.length > 0) {
-            console.log(`✅ Found ${data.subtitles.length} subtitles`);
-            showToast(`Nalezeno ${data.subtitles.length} titulků`, 'success');
-            
-            // Filter Czech/Slovak subtitles
-            const czechSubtitles = data.subtitles.filter(sub => 
-                sub.language.toLowerCase().includes('čes') || 
-                sub.language.toLowerCase().includes('czech') ||
-                sub.language.toLowerCase().includes('sloven')
-            );
-            
-            return czechSubtitles.length > 0 ? czechSubtitles : data.subtitles.slice(0, 2);
-        } else {
-            showToast('Žádné titulky nebyly nalezeny', 'warning');
-            return [];
-        }
-    } catch (error) {
-        console.error('Subtitles error:', error);
-        showToast(`Chyba při vyhledávání titulků: ${error.message}`, 'warning');
-        return [];
-    }
-}
-
-/**
  * Generate Jellyfin-compatible filename
  */
 function generateJellyfinName(item, imdbInfo) {
@@ -2262,19 +2222,12 @@ async function selectForDownload(moviePath, movieTitle) {
         // Generate filename
         const filename = generateJellyfinName({ title: movieTitle }, imdbInfo);
         
-        // Download subtitles if needed
-        let subtitles = [];
-        if (imdbInfo && imdbInfo.Title) {
-            subtitles = await downloadSubtitles(imdbInfo.Title, imdbInfo.Year);
-        }
-        
         // Start download with selected quality
         await startDownload({
             title: movieTitle,
             url: selectedUrl,
             filename: filename,
             imdbInfo: imdbInfo,
-            subtitles: subtitles,
             language: currentLanguage
         });
         
@@ -2320,7 +2273,6 @@ async function startDownload(item) {
             title: item.title,
             imdbData: imdbData || null,  // ✅ použij to co ses opravdu dotáhl
             type: currentMode,
-            subtitles: item.subtitles || [],
             season: item.season || null,
             episode: item.episode || null
         };
@@ -2519,13 +2471,6 @@ function showDownloadComplete(item) {
                     📁 ${escapeHtml(item.path)}
                 </p>` : ''}
             </div>
-            ${item.files && item.files.subtitles && item.files.subtitles.length > 0 ? `
-                <div style="margin-top: 0.5rem; padding: 0.5rem; background: rgba(255,255,255,0.03);">
-                    <small style="color: var(--color-text-secondary);">
-                        📝 Titulky: ${item.files.subtitles.join(', ')}
-                    </small>
-                </div>
-            ` : ''}
         </div>
     `;
     

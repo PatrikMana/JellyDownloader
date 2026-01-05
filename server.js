@@ -912,71 +912,6 @@ app.get('/api/tmdb/original-title', async (req, res) => {
     }
 });
 
-// Titulky.com scraping endpoint
-app.get('/api/subtitles/:title/:year?', async (req, res) => {
-    try {
-        const { title, year } = req.params;
-        const searchQuery = `${title} ${year || ''}`.trim();
-        
-        console.log('📝 Searching subtitles for:', searchQuery);
-        
-        // Search on titulky.com
-        const searchUrl = `https://titulky.com/hledej.php?search=${encodeURIComponent(searchQuery)}&action=search`;
-        
-        const response = await axios.get(searchUrl, {
-            timeout: 15000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'cs,sk;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
-        });
-        
-        const $ = cheerio.load(response.data);
-        const subtitles = [];
-        
-        // Parse subtitle results
-        $('.table tr').each((index, element) => {
-            if (index === 0) return; // Skip header
-            
-            const $row = $(element);
-            const $link = $row.find('a[href*="detail.php"]');
-            
-            if ($link.length > 0) {
-                const subtitleTitle = $link.text().trim();
-                const subtitleUrl = 'https://titulky.com/' + $link.attr('href');
-                const language = $row.find('td').eq(2).text().trim();
-                const format = $row.find('td').eq(3).text().trim();
-                
-                subtitles.push({
-                    title: subtitleTitle,
-                    url: subtitleUrl,
-                    language: language,
-                    format: format
-                });
-            }
-        });
-        
-        console.log(`✅ Found ${subtitles.length} subtitles`);
-        
-        res.json({
-            success: true,
-            subtitles: subtitles,
-            searchQuery: searchQuery
-        });
-        
-    } catch (error) {
-        console.error('Chyba při vyhledávání titulků:', error.message);
-        res.status(500).json({
-            success: false,
-            error: 'Nepodařilo se vyhledat titulky'
-        });
-    }
-});
-
 // Advanced IMDB resolver with aliases and fallback
 // === ROBUST TITLE PARSING PIPELINE ===
 
@@ -1697,7 +1632,7 @@ app.post('/api/download/series', async (req, res) => {
 
 // Download endpoint
 app.post('/api/download', async (req, res) => {
-    const { videoUrl, title, imdbData, type = 'movie', subtitles = [], season = null, episode = null } = req.body;
+    const { videoUrl, title, imdbData, type = 'movie', season = null, episode = null } = req.body;
 
     if (!videoUrl || !title) {
         return res.status(400).json({ success: false, error: 'Chybí povinné parametry (videoUrl, title)' });
@@ -1791,30 +1726,6 @@ app.post('/api/download', async (req, res) => {
 
             await pipelineAsync(videoResponse.data, writeStream);
 
-            // titulky (ponechávám tvůj přístup; pokud titulky nejsou přímo stažitelné, může být potřeba upravit)
-            const subtitleFiles = [];
-            for (const subtitle of subtitles) {
-                try {
-                    const subtitleFilename = `${baseFilename}.${subtitle.language}.srt`;
-                    const subtitlePath = path.join(downloadDir, subtitleFilename);
-
-                    const subtitleResponse = await axios({
-                        method: 'GET',
-                        url: subtitle.url,
-                        responseType: 'stream',
-                        timeout: 15000,
-                        headers: { 'User-Agent': 'Mozilla/5.0' }
-                    });
-
-                    const subtitleWriteStream = fs.createWriteStream(subtitlePath);
-                    await pipelineAsync(subtitleResponse.data, subtitleWriteStream);
-                    job.createdFiles.push(subtitlePath);
-                    subtitleFiles.push(subtitleFilename);
-                } catch (e) {
-                    // ignore failed subtitles
-                }
-            }
-
             // Pro seriály vytvoř metadata NFO soubor
             let metadataFilename = null;
             if (type === 'series') {
@@ -1845,7 +1756,6 @@ app.post('/api/download', async (req, res) => {
                 jobId: job.jobId,
                 files: {
                     video: path.basename(videoPath),
-                    subtitles: subtitleFiles,
                     metadata: metadataFilename
                 },
                 path: downloadDir,
