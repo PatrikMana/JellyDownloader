@@ -1,0 +1,121 @@
+/* ===============================================
+   NAVBAR STYLES
+   =============================================== */
+
+.navbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 70px;
+    background: rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--color-border);
+    z-index: 1000;
+    transition: var(--transition-normal);
+}
+
+.nav-container {
+    max-width: var(--container-width);
+    margin: 0 auto;
+    padding: 0 var(--spacing-md);
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.nav-logo {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.nav-logo h1 {
+    font-size: 1.1rem;
+    font-weight: var(--font-weight-black);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+}
+
+.nav-logo h1:hover {
+    animation: glitch-text 0.3s ease;
+}
+
+.nav-version {
+    font-size: 0.65rem;
+    color: var(--color-text-muted);
+    letter-spacing: 0.2em;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+}
+
+.nav-right {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.nav-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    letter-spacing: 0.1em;
+}
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    background: var(--color-glitch-green);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--color-glitch-green);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.nav-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--border-radius);
+}
+
+.nav-btn:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    .navbar {
+        height: 60px;
+    }
+
+    .nav-logo h1 {
+        font-size: 0.9rem;
+        letter-spacing: 0.15em;
+    }
+
+    .nav-version {
+        display: none;
+    }
+
+    .nav-status {
+        display: none;
+    }
+}
