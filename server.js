@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -8,13 +11,42 @@ const https = require('https');
 const { pipeline } = require('stream');
 const { promisify } = require('util');
 const pipelineAsync = promisify(pipeline);
+const crypto = require('crypto');
+const { EventEmitter } = require('events');
+
+const downloadJobs = new Map(); // jobId -> { emitter, ...state }
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // IMDB API Configuration
 const OMDB_API_KEY = process.env.OMDB_API_KEY || 'your-api-key-here'; // Get from http://www.omdbapi.com/apikey.aspx
+const TMDB_API_KEY = process.env.TMDB_API_KEY || null; // Get from https://www.themoviedb.org/settings/api
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
+
+// Download paths - can be configured separately for movies and series
+const ENV_PATH = path.join(__dirname, '.env');
+
+function getDownloadPaths() {
+    // Re-read .env to get latest values
+    const envContent = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
+    const envLines = envContent.split('\n');
+    const env = {};
+    envLines.forEach(line => {
+        const match = line.match(/^([^=]+)=(.*)$/);
+        if (match) {
+            env[match[1].trim()] = match[2].trim();
+        }
+    });
+    
+    return {
+        movies: env.MOVIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'movies'),
+        series: env.SERIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'tvshows')
+    };
+}
+
+// Legacy support
+const JELLYFIN_DIR = process.env.JELLYFIN_DIR || null;
 
 // Ensure downloads directory exists
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -25,6 +57,28 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+
+function createJob(initial) {
+    const jobId = crypto.randomUUID();
+    const emitter = new EventEmitter();
+    const job = {
+        jobId,
+        emitter,
+        status: 'queued',
+        createdAt: Date.now(),
+        ...initial
+    };
+    downloadJobs.set(jobId, job);
+    return job;
+}
+
+function emitJob(job, payload) {
+    job.emitter.emit('evt', payload);
+}
+
+function cleanupJobLater(jobId, ms = 60 * 60 * 1000) { // 1h
+    setTimeout(() => downloadJobs.delete(jobId), ms).unref?.();
+}
 
 // Serve static files
 app.get('/', (req, res) => {
@@ -94,6 +148,33 @@ app.get('/api/search/:searchTerm', async (req, res) => {
   }
 });
 
+app.get('/api/download/progress/:jobId', (req, res) => {
+    const job = downloadJobs.get(req.params.jobId);
+    if (!job) return res.status(404).end();
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    // initial snapshot
+    send({ type: 'hello', jobId: job.jobId, status: job.status });
+
+    const onEvt = (payload) => send(payload);
+    job.emitter.on('evt', onEvt);
+
+    // keepalive
+    const ka = setInterval(() => res.write(`: ping\n\n`), 15000);
+
+    req.on('close', () => {
+        clearInterval(ka);
+        job.emitter.off('evt', onEvt);
+        res.end();
+    });
+});
+
 // API endpoint pre získanie video URL
 app.get('/api/video/:moviePath(*)', async (req, res) => {
   try {
@@ -150,6 +231,8 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
       res.json({
         success: true,
         videoUrl: videoUrl,
+        qualities: [{ src: videoUrl, res: 0, label: 'Default' }],
+        maxResolution: null,
         moviePath: moviePath,
         method: 'alternative'
       });
@@ -159,21 +242,145 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
     const jsSection = html.substring(sourcesStart, tracksStart);
     console.log('🔍 JavaScript sekce:', jsSection.substring(0, 200) + '...');
     
-    // Extrakce video URL pomocí regex - vylepšené
-    const urlPatterns = [
-      /"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g,
-      /'([^']*\.(mp4|mkv|avi|webm)[^']*)'/g,
-      /file\s*:\s*"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g
-    ];
-    
+    // Parse sources array podle tvého skriptu
+    let qualities = [];
     let videoUrl = null;
-    for (const pattern of urlPatterns) {
-      const matches = jsSection.match(pattern);
-      if (matches && matches.length > 0) {
-        videoUrl = matches[0].replace(/['"]/g, '');
-        if (videoUrl.startsWith('http')) {
-          console.log(`✅ Video URL nalezena vzorem: ${videoUrl}`);
-          break;
+    let maxResolution = 0;
+    
+    try {
+      console.log('📦 Parsing sources using browser-like logic...');
+      
+      // Extrahi celý sources = [...] block
+      const sourcesMatch = jsSection.match(/var\s+sources\s*=\s*(\[[\s\S]*?\]);/);
+      
+      if (sourcesMatch) {
+        const sourcesArrayText = sourcesMatch[1];
+        console.log('🔍 Found sources array, length:', sourcesArrayText.length);
+        
+        try {
+          // Bezpečnější parsing - použij Function constructor místo eval
+          const sourcesArray = new Function('return ' + sourcesArrayText)();
+          
+          if (Array.isArray(sourcesArray) && sourcesArray.length > 0) {
+            console.log(`📋 Sources array has ${sourcesArray.length} items`);
+            
+            // Simulate your script logic: sources.videos.map((item) => ...)
+            // But prehrajto uses sources directly as array of video objects
+            const foundQualities = [];
+            
+            sourcesArray.forEach((item, index) => {
+              if (item.file || item.src) {
+                const src = item.file || item.src;
+                
+                console.log(`📹 Video ${index}: checking item:`, { 
+                  hasRes: !!item.res, 
+                  hasQuality: !!item.quality,
+                  hasSize: !!item.size,
+                  urlLength: src.length
+                });
+                
+                // Zkus získat res z objektu
+                let res = 0;
+                let label = `Video ${index + 1}`;
+                
+                if (item.res) {
+                  res = parseInt(item.res);
+                  label = `${res}p`;
+                  console.log(`  ✅ Found explicit res: ${res}p`);
+                } else if (item.quality) {
+                  // Někdy je quality místo res
+                  if (item.quality.includes('1080')) res = 1080;
+                  else if (item.quality.includes('720')) res = 720;
+                  else if (item.quality.includes('480')) res = 480;
+                  label = item.quality;
+                  console.log(`  ✅ Found quality property: ${label}`);
+                } else {
+                  // Lepší heuristika - zkus více indikátorů
+                  console.log(`  🔍 Using heuristics for quality detection...`);
+                  
+                  // 1) Hledej pattern v URL (např. "720p", "1080p")
+                  const urlQualityMatch = src.match(/(\d{3,4})p/i);
+                  if (urlQualityMatch) {
+                    res = parseInt(urlQualityMatch[1]);
+                    label = `${res}p`;
+                    console.log(`    📍 URL pattern: ${label}`);
+                  }
+                  // 2) Hledej keywords v URL
+                  else if (src.includes('1080') || src.includes('fullhd') || src.includes('fhd')) {
+                    res = 1080;
+                    label = '1080p';
+                    console.log(`    📍 URL keyword: 1080p`);
+                  }
+                  else if (src.includes('720') || src.includes('hd')) {
+                    res = 720;
+                    label = '720p';
+                    console.log(`    📍 URL keyword: 720p`);
+                  }
+                  // 3) Fallback: rozliš podle indexu (první = horší, poslední = lepší)
+                  else {
+                    // V prehrajto.cz je obvykle první video HORŠÍ kvalita, druhé LEPŠÍ
+                    if (index === 0) {
+                      res = 720;   // První = 720p
+                      label = '720p';
+                      console.log(`    📍 Index fallback: 720p (first video)`);
+                    } else {
+                      res = 1080;  // Druhý/další = 1080p
+                      label = '1080p';
+                      console.log(`    📍 Index fallback: 1080p (later video)`);
+                    }
+                  }
+                }
+                
+                foundQualities.push({
+                  src: src,
+                  res: res,
+                  label: label,
+                  index: index
+                });
+                
+                console.log(`  💾 Added: ${label} (${res}p)`);
+              }
+            });
+            
+            // Seřaď podle rozlišení (nejvyšší první)
+            qualities = foundQualities
+              .filter(q => q.src && q.src.startsWith('http'))
+              .sort((a, b) => b.res - a.res);
+              
+            if (qualities.length > 0) {
+              console.log(`✅ Nalezeno ${qualities.length} kvalit:`, qualities.map(q => `${q.label}(${q.res})`).join(', '));
+              videoUrl = qualities[0].src;
+              maxResolution = qualities[0].res;
+            }
+          }
+        } catch (evalError) {
+          console.warn('⚠️ Nepodařilo se parsovat sources array:', evalError.message);
+        }
+      }
+      
+      if (qualities.length === 0) {
+        console.log('⚠️ Žádné kvality nenalezeny, zkusím fallback...');
+      }
+    } catch (parseError) {
+      console.warn('⚠️ Nepodařilo se parsovat sources:', parseError.message);
+    }
+    
+    // Fallback: použij regex na extrakci první URL
+    if (!videoUrl) {
+      const urlPatterns = [
+        /"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g,
+        /'([^']*\.(mp4|mkv|avi|webm)[^']*)'/g,
+        /file\s*:\s*"([^"]*\.(mp4|mkv|avi|webm)[^"]*)"/g
+      ];
+      
+      for (const pattern of urlPatterns) {
+        const matches = jsSection.match(pattern);
+        if (matches && matches.length > 0) {
+          videoUrl = matches[0].replace(/['"]/g, '');
+          if (videoUrl.startsWith('http')) {
+            console.log(`✅ Video URL nalezena vzorem (fallback): ${videoUrl}`);
+            break;
+          }
         }
       }
     }
@@ -182,9 +389,20 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
       throw new Error('Video URL nebyla nalezena v JavaScript kódu nebo není validní HTTP URL');
     }
     
+    // Pokud jsme nenašli žádné kvality, vytvoř alespoň jednu
+    if (qualities.length === 0) {
+      qualities.push({
+        src: videoUrl,
+        res: 0,
+        label: 'Default'
+      });
+    }
+    
     res.json({
       success: true,
-      videoUrl: videoUrl,
+      videoUrl: videoUrl,  // nejvyšší kvalita jako default
+      qualities: qualities,
+      maxResolution: maxResolution || null,
       moviePath: moviePath,
       method: 'standard'
     });
@@ -203,14 +421,16 @@ app.get('/api/video/:moviePath(*)', async (req, res) => {
 // IMDB API endpoint
 app.get('/api/imdb/:title/:year?', async (req, res) => {
     try {
-        const { title, year } = req.params;
+        const rawTitle = req.params.title;
+        const yearParam = req.params.year || null;
+        const originalQuery = req.query.originalQuery || null; // Původní hledaný výraz od uživatele
         
         if (OMDB_API_KEY === 'your-api-key-here') {
             // Mock IMDB data for development
             const mockData = {
                 imdbID: 'tt' + Math.random().toString().substring(2, 9),
-                Title: title,
-                Year: year || new Date().getFullYear().toString(),
+                Title: rawTitle,
+                Year: yearParam || new Date().getFullYear().toString(),
                 Type: 'movie',
                 Genre: 'Action, Drama',
                 Director: 'Unknown Director',
@@ -220,33 +440,101 @@ app.get('/api/imdb/:title/:year?', async (req, res) => {
                 imdbRating: '7.5'
             };
             
-            console.log('📺 Returning mock IMDB data for:', title);
+            console.log('📺 [IMDB][MOCK] raw="%s" | returning mock', rawTitle);
             return res.json({ success: true, data: mockData });
         }
         
-        // Real OMDB API call
-        const searchUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&t=${encodeURIComponent(title)}${year ? `&y=${year}` : ''}`;
-        
-        console.log('🔍 Searching IMDB for:', title, year ? `(${year})` : '');
-        const response = await axios.get(searchUrl, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        // === NOVÝ PŘÍSTUP: Nejprve zkusíme originalQuery (bez regexu) ===
+        if (originalQuery && originalQuery.trim()) {
+            console.log(`[IMDB][STEP1] Zkouším původní query uživatele: "${originalQuery}"`);
+            const queryResult = await resolveImdbSimple(originalQuery.trim(), yearParam);
+            
+            if (queryResult.found) {
+                const d = queryResult.data;
+                console.log(
+                    `[IMDB][FOUND-QUERY] originalQuery="${originalQuery}" | ` +
+                    `-> "${d.Title}" (${d.Year}) ${d.imdbID}`
+                );
+                return res.json({ success: true, data: queryResult.data });
+            } else {
+                console.log(`[IMDB][STEP1-MISS] Původní query "${originalQuery}" nenašlo nic, pokračuji s názvem z Prehrajto...`);
             }
-        });
+        }
         
-        if (response.data.Response === 'True') {
-            console.log('✅ IMDB data found:', response.data.Title);
-            res.json({ success: true, data: response.data });
+        // === FALLBACK: Použij rawTitle s regex čištěním ===
+        console.log(`[IMDB][STEP2] Zkouším název z Prehrajto s regex: "${rawTitle}"`);
+        const result = await resolveImdb(rawTitle, yearParam);
+        
+        // Logování do Node konzole
+        if (result.found) {
+            const d = result.data;
+            console.log(
+                `[IMDB][FOUND] raw="${rawTitle}" | clean="${result.queryTitle}" | ` +
+                `year=${result.year || 'N/A'} | type=${result.type} | method=${result.method} | ` +
+                `alias=${result.alias || 'none'} | ep=${result.ep ? `S${result.ep.season}E${result.ep.episode}` : 'none'} | ` +
+                `-> "${d.Title}" (${d.Year}) ${d.imdbID}`
+            );
+            
+            // Pokud byla search fallback, ukaž kandidáty
+            if (result.pickedFromSearch) {
+                console.log(`  [IMDB][SEARCH] score=${result.pickedFromSearch.bestScore} | candidates=[${result.pickedFromSearch.candidates.join(', ')}]`);
+            }
+            
+            return res.json({ success: true, data: result.data });
         } else {
-            console.log('❌ IMDB not found:', response.data.Error);
-            res.status(404).json({
+            console.log(
+                `[IMDB][NOTFOUND] raw="${rawTitle}" | clean="${result.queryTitle}" | ` +
+                `year=${result.year || 'N/A'} | type=${result.type} | method=${result.method} | ` +
+                `alias=${result.alias || 'none'} | ep=${result.ep ? `S${result.ep.season}E${result.ep.episode}` : 'none'}`
+            );
+            
+            if (result.candidates) {
+                console.log(`  [IMDB][SEARCH] no pick, candidates=[${result.candidates.join(', ')}]`);
+            }
+            
+            return res.status(404).json({
                 success: false,
-                error: response.data.Error || 'Film nebyl v IMDB databázi nalezen'
+                error: 'Film nebyl v IMDB databázi nalezen'
             });
         }
     } catch (error) {
-        console.error('Chyba při IMDB vyhledávání:', error.message);
+        console.error('[IMDB][ERROR]', error.message);
+        res.status(500).json({
+            success: false,
+            error: 'Nepodařilo se získat IMDB informace'
+        });
+    }
+});
+
+// IMDB Get by ID endpoint (direct lookup)
+app.get('/api/imdb-by-id/:imdbId', async (req, res) => {
+    try {
+        const imdbId = req.params.imdbId;
+        
+        console.log(`🔎 [IMDB-BY-ID] Looking up: ${imdbId}`);
+        
+        if (OMDB_API_KEY === 'your-api-key-here') {
+            return res.status(503).json({ success: false, error: 'OMDB API není nakonfigurováno' });
+        }
+        
+        const omdbUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${imdbId}&plot=short`;
+        const response = await axios.get(omdbUrl, { timeout: 10000 });
+        
+        if (response.data.Response === 'True') {
+            console.log(`✅ [IMDB-BY-ID] Found: "${response.data.Title}" (${response.data.Year})`);
+            res.json({
+                success: true,
+                data: response.data
+            });
+        } else {
+            console.log(`❌ [IMDB-BY-ID] Not found: ${imdbId}`);
+            res.status(404).json({
+                success: false,
+                error: response.data.Error || 'Film nenalezen'
+            });
+        }
+    } catch (error) {
+        console.error('[IMDB-BY-ID][ERROR]', error.message);
         res.status(500).json({
             success: false,
             error: 'Nepodařilo se získat IMDB informace'
@@ -390,217 +678,1168 @@ app.get('/api/imdb/series/:imdbId', async (req, res) => {
     }
 });
 
-// Titulky.com scraping endpoint
-app.get('/api/subtitles/:title/:year?', async (req, res) => {
+// Get all seasons with episodes for a series
+app.get('/api/imdb/series/:imdbId/seasons', async (req, res) => {
     try {
-        const { title, year } = req.params;
-        const searchQuery = `${title} ${year || ''}`.trim();
+        const imdbId = req.params.imdbId;
         
-        console.log('📝 Searching subtitles for:', searchQuery);
-        
-        // Search on titulky.com
-        const searchUrl = `https://titulky.com/hledej.php?search=${encodeURIComponent(searchQuery)}&action=search`;
-        
-        const response = await axios.get(searchUrl, {
-            timeout: 15000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'cs,sk;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
-        });
-        
-        const $ = cheerio.load(response.data);
-        const subtitles = [];
-        
-        // Parse subtitle results
-        $('.table tr').each((index, element) => {
-            if (index === 0) return; // Skip header
-            
-            const $row = $(element);
-            const $link = $row.find('a[href*="detail.php"]');
-            
-            if ($link.length > 0) {
-                const subtitleTitle = $link.text().trim();
-                const subtitleUrl = 'https://titulky.com/' + $link.attr('href');
-                const language = $row.find('td').eq(2).text().trim();
-                const format = $row.find('td').eq(3).text().trim();
-                
-                subtitles.push({
-                    title: subtitleTitle,
-                    url: subtitleUrl,
-                    language: language,
-                    format: format
+        if (OMDB_API_KEY === 'your-api-key-here') {
+            // Mock data for development
+            const mockSeasons = [];
+            for (let s = 1; s <= 3; s++) {
+                const episodes = [];
+                const episodeCount = Math.floor(Math.random() * 8) + 6; // 6-13 episodes
+                for (let e = 1; e <= episodeCount; e++) {
+                    episodes.push({
+                        Episode: e.toString(),
+                        Title: `Epizoda ${e} - Mock název`,
+                        Released: `2020-0${s}-${e.toString().padStart(2, '0')}`,
+                        imdbRating: (Math.random() * 3 + 7).toFixed(1),
+                        imdbID: `tt${Math.random().toString().substring(2, 9)}`
+                    });
+                }
+                mockSeasons.push({
+                    season: s,
+                    episodes: episodes
                 });
             }
-        });
+            
+            console.log('📺 Returning mock seasons with episodes for:', imdbId);
+            return res.json({ success: true, seasons: mockSeasons });
+        }
         
-        console.log(`✅ Found ${subtitles.length} subtitles`);
+        // First get series details to know how many seasons
+        const detailsUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${imdbId}`;
+        const detailsResponse = await axios.get(detailsUrl, { timeout: 10000 });
+        
+        if (detailsResponse.data.Response !== 'True') {
+            return res.status(404).json({
+                success: false,
+                error: 'Seriál nebyl nalezen'
+            });
+        }
+        
+        const totalSeasons = parseInt(detailsResponse.data.totalSeasons) || 1;
+        const seriesTitle = detailsResponse.data.Title;
+        
+        console.log(`📺 Loading ${totalSeasons} seasons for: ${seriesTitle}`);
+        
+        // Fetch all seasons in parallel
+        const seasonPromises = [];
+        for (let s = 1; s <= totalSeasons; s++) {
+            const seasonUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${imdbId}&Season=${s}`;
+            seasonPromises.push(
+                axios.get(seasonUrl, { timeout: 10000 })
+                    .then(response => ({
+                        season: s,
+                        data: response.data
+                    }))
+                    .catch(err => ({
+                        season: s,
+                        error: err.message
+                    }))
+            );
+        }
+        
+        const seasonResults = await Promise.all(seasonPromises);
+        
+        const seasons = seasonResults
+            .filter(result => result.data && result.data.Response === 'True')
+            .map(result => ({
+                season: result.season,
+                episodes: (result.data.Episodes || []).map(ep => ({
+                    Episode: ep.Episode,
+                    Title: ep.Title,
+                    Released: ep.Released,
+                    imdbRating: ep.imdbRating,
+                    imdbID: ep.imdbID
+                }))
+            }));
+        
+        console.log(`✅ Loaded ${seasons.length} seasons with episodes`);
         
         res.json({
             success: true,
-            subtitles: subtitles,
-            searchQuery: searchQuery
+            seriesTitle: seriesTitle,
+            totalSeasons: totalSeasons,
+            seasons: seasons
         });
         
     } catch (error) {
-        console.error('Chyba při vyhledávání titulků:', error.message);
+        console.error('Chyba při získávání sezón:', error.message);
         res.status(500).json({
             success: false,
-            error: 'Nepodařilo se vyhledat titulky'
+            error: 'Nepodařilo se získat sezóny seriálu'
         });
     }
 });
 
-// Helper function to generate Jellyfin-compatible filename
-function generateJellyfinFilename(title, imdbData, type = 'movie') {
-    // Clean title (remove invalid filename characters)
-    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
-    
-    if (type === 'movie') {
-        // Movies: Movie Title (Year) [imdbid-ttXXXXXXX]
-        const year = imdbData?.Year || 'Unknown';
-        const imdbId = imdbData?.imdbID || 'unknown';
-        return `${cleanTitle} (${year}) [imdbid-${imdbId}]`;
-    } else {
-        // Series: Series Name [imdbid-ttXXXXXXX]
-        const imdbId = imdbData?.imdbID || 'unknown';
-        return `${cleanTitle} [imdbid-${imdbId}]`;
-    }
-}
-
-// Download endpoint
-app.post('/api/download', async (req, res) => {
+// Get Czech title for a series using TMDB API
+app.get('/api/tmdb/czech-title/:imdbId', async (req, res) => {
     try {
-        const { videoUrl, title, imdbData, type = 'movie', subtitles = [] } = req.body;
+        const imdbId = req.params.imdbId;
         
-        if (!videoUrl || !title) {
-            return res.status(400).json({
-                success: false,
-                error: 'Chybí povinné parametry (videoUrl, title)'
-            });
+        if (!TMDB_API_KEY) {
+            console.log('⚠️ TMDB API key not configured, cannot fetch Czech title');
+            return res.json({ success: false, error: 'TMDB API není nakonfigurováno' });
         }
         
-        console.log('📥 Starting download for:', title);
+        // First, find the TMDB ID using IMDB ID
+        const findUrl = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`;
         
-        // Generate Jellyfin-compatible filename
-        const baseFilename = generateJellyfinFilename(title, imdbData, type);
-        const videoFilename = `${baseFilename}.mp4`;
-        const videoPath = path.join(DOWNLOADS_DIR, videoFilename);
+        console.log(`🔍 Looking up TMDB ID for IMDB: ${imdbId}`);
+        const findResponse = await axios.get(findUrl, { timeout: 10000 });
         
-        // Create download directory if it doesn't exist
-        const downloadDir = path.dirname(videoPath);
-        if (!fs.existsSync(downloadDir)) {
-            fs.mkdirSync(downloadDir, { recursive: true });
+        const tvResults = findResponse.data.tv_results || [];
+        if (tvResults.length === 0) {
+            console.log('❌ No TMDB results found for IMDB ID:', imdbId);
+            return res.json({ success: false, error: 'Seriál nebyl nalezen v TMDB' });
         }
         
-        // Start video download
-        console.log('📺 Downloading video to:', videoFilename);
+        const tmdbId = tvResults[0].id;
+        const originalTitle = tvResults[0].name;
         
-        // Get video stream
-        const videoResponse = await axios({
-            method: 'GET',
-            url: videoUrl,
-            responseType: 'stream',
-            timeout: 30000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://prehrajto.cz/'
-            }
-        });
+        // Now get Czech translation
+        const detailsUrl = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=cs-CZ`;
+        const detailsResponse = await axios.get(detailsUrl, { timeout: 10000 });
         
-        // Create write stream
-        const writeStream = fs.createWriteStream(videoPath);
+        const czechTitle = detailsResponse.data.name;
         
-        // Track download progress
-        let downloadedBytes = 0;
-        const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
+        // Also try to get alternative titles for more options
+        const altTitlesUrl = `https://api.themoviedb.org/3/tv/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+        let alternativeTitles = [];
         
-        videoResponse.data.on('data', (chunk) => {
-            downloadedBytes += chunk.length;
-            const progress = totalBytes > 0 ? (downloadedBytes / totalBytes * 100).toFixed(1) : 0;
-            
-            // You could emit progress via WebSocket here
-            console.log(`📊 Download progress: ${progress}% (${downloadedBytes}/${totalBytes} bytes)`);
-        });
-        
-        // Start download
-        await pipelineAsync(videoResponse.data, writeStream);
-        
-        console.log('✅ Video download completed:', videoFilename);
-        
-        // Download subtitles if provided
-        const subtitleFiles = [];
-        for (const subtitle of subtitles) {
-            try {
-                const subtitleFilename = `${baseFilename}.${subtitle.language}.srt`;
-                const subtitlePath = path.join(DOWNLOADS_DIR, subtitleFilename);
-                
-                console.log('📝 Downloading subtitle:', subtitleFilename);
-                
-                const subtitleResponse = await axios({
-                    method: 'GET',
-                    url: subtitle.url,
-                    responseType: 'stream',
-                    timeout: 15000,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
-                });
-                
-                const subtitleWriteStream = fs.createWriteStream(subtitlePath);
-                await pipelineAsync(subtitleResponse.data, subtitleWriteStream);
-                
-                subtitleFiles.push(subtitleFilename);
-                console.log('✅ Subtitle downloaded:', subtitleFilename);
-            } catch (subtitleError) {
-                console.error('❌ Subtitle download failed:', subtitle.language, subtitleError.message);
-            }
+        try {
+            const altResponse = await axios.get(altTitlesUrl, { timeout: 10000 });
+            alternativeTitles = (altResponse.data.results || [])
+                .filter(t => t.iso_3166_1 === 'CZ' || t.iso_3166_1 === 'SK')
+                .map(t => t.title);
+        } catch (e) {
+            // Ignore alternative titles error
         }
         
-        // Create metadata file for Jellyfin
-        const metadataFilename = `${baseFilename}.nfo`;
-        const metadataPath = path.join(DOWNLOADS_DIR, metadataFilename);
-        
-        const metadata = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<movie>
-    <title>${title}</title>
-    <originaltitle>${imdbData?.Title || title}</originaltitle>
-    <year>${imdbData?.Year || ''}</year>
-    <plot>${imdbData?.Plot || ''}</plot>
-    <runtime>${imdbData?.Runtime || ''}</runtime>
-    <genre>${imdbData?.Genre || ''}</genre>
-    <director>${imdbData?.Director || ''}</director>
-    <actor>${imdbData?.Actors || ''}</actor>
-    <imdb>${imdbData?.imdbID || ''}</imdb>
-    <rating>${imdbData?.imdbRating || ''}</rating>
-    <poster>${imdbData?.Poster || ''}</poster>
-</movie>`;
-        
-        fs.writeFileSync(metadataPath, metadata, 'utf8');
-        console.log('✅ Metadata file created:', metadataFilename);
+        console.log(`✅ Czech title for "${originalTitle}": "${czechTitle}"`);
+        if (alternativeTitles.length > 0) {
+            console.log(`   Alternative titles: ${alternativeTitles.join(', ')}`);
+        }
         
         res.json({
             success: true,
-            message: 'Stahování dokončeno',
-            files: {
-                video: videoFilename,
-                subtitles: subtitleFiles,
-                metadata: metadataFilename
-            },
-            path: DOWNLOADS_DIR
+            originalTitle: originalTitle,
+            czechTitle: czechTitle,
+            alternativeTitles: alternativeTitles,
+            tmdbId: tmdbId
         });
         
     } catch (error) {
-        console.error('❌ Download error:', error.message);
+        console.error('Chyba při získávání českého názvu:', error.message);
         res.status(500).json({
             success: false,
-            error: `Chyba při stahování: ${error.message}`
+            error: 'Nepodařilo se získat český název'
         });
     }
+});
+
+// Get original title from Czech title using TMDB API (for movies)
+app.get('/api/tmdb/original-title', async (req, res) => {
+    try {
+        const czechTitle = req.query.title;
+        const year = req.query.year;
+        
+        if (!czechTitle) {
+            return res.status(400).json({ success: false, error: 'Chybí název filmu' });
+        }
+        
+        if (!TMDB_API_KEY) {
+            console.log('⚠️ TMDB API key not configured');
+            return res.json({ success: false, error: 'TMDB API není nakonfigurováno' });
+        }
+        
+        console.log(`🔍 Looking up original title for Czech: "${czechTitle}" (${year || 'no year'})`);
+        
+        // Search on TMDB with Czech query
+        let searchUrl = `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(czechTitle)}&language=cs-CZ`;
+        if (year) {
+            searchUrl += `&year=${year}`;
+        }
+        
+        const searchResponse = await axios.get(searchUrl, { timeout: 10000 });
+        
+        if (!searchResponse.data.results || searchResponse.data.results.length === 0) {
+            // Try without year
+            if (year) {
+                searchUrl = `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(czechTitle)}&language=cs-CZ`;
+                const retryResponse = await axios.get(searchUrl, { timeout: 10000 });
+                if (!retryResponse.data.results || retryResponse.data.results.length === 0) {
+                    console.log('❌ No TMDB results found for:', czechTitle);
+                    return res.json({ success: false, error: 'Film nebyl nalezen v TMDB' });
+                }
+                searchResponse.data.results = retryResponse.data.results;
+            } else {
+                console.log('❌ No TMDB results found for:', czechTitle);
+                return res.json({ success: false, error: 'Film nebyl nalezen v TMDB' });
+            }
+        }
+        
+        const movie = searchResponse.data.results[0];
+        const tmdbId = movie.id;
+        
+        // Get full movie details to get original title
+        const detailsUrl = `https://api.themoviedb.org/3/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
+        const detailsResponse = await axios.get(detailsUrl, { timeout: 10000 });
+        
+        const originalTitle = detailsResponse.data.original_title || detailsResponse.data.title;
+        const releaseYear = detailsResponse.data.release_date ? detailsResponse.data.release_date.substring(0, 4) : null;
+        const imdbId = detailsResponse.data.imdb_id;
+        
+        console.log(`✅ Original title for "${czechTitle}": "${originalTitle}" (${releaseYear}) [${imdbId}]`);
+        
+        res.json({
+            success: true,
+            originalTitle: originalTitle,
+            czechTitle: movie.title,
+            year: releaseYear,
+            imdbId: imdbId,
+            tmdbId: tmdbId
+        });
+        
+    } catch (error) {
+        console.error('Chyba při získávání originálního názvu:', error.message);
+        res.status(500).json({
+            success: false,
+            error: 'Nepodařilo se získat originální název'
+        });
+    }
+});
+
+// Advanced IMDB resolver with aliases and fallback
+// === ROBUST TITLE PARSING PIPELINE ===
+
+function stripDiacritics(s) {
+    return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+const EP_RE = /\bS(\d{1,2})E(\d{1,2})\b|\b(\d{1,2})x(\d{1,2})\b/i;
+const YEAR_RE = /\b(19\d{2}|20\d{2})\b/;
+
+// všechen "bordel" co se typicky objevuje v názvech z prehrajto
+const JUNK_RE = new RegExp(
+    String.raw`\b(` +
+    [
+        // jazyk/audio
+        `cz`, `czech`, `cesky`, `česky`, `čeština`,
+        `sk`, `slovak`, `slovensky`, `slovenčina`,
+        `en`, `eng`, `english`, `dual`, `multi`,
+        `dab`, `dabing`, `dubbing`, `czdab`, `czdabing`, `dub`,
+        `titulky`, `tit`, `sub`, `subs`, `subtitle`, `forced`,
+
+        // kvalita / rozlišení
+        `4k`, `uhd`, `fhd`, `hdr`, `dv`, `dolby\\s*vision`,
+        `2160p`, `1080p`, `720p`, `480p`,
+
+        // zdroj
+        `web[-_. ]?dl`, `webrip`, `bluray`, `brrip`, `bdrip`, `dvdrip`, `hdtv`, `cam`, `ts`,
+
+        // kodeky
+        `x264`, `x265`, `h\\.?264`, `h\\.?265`, `hevc`,
+        `aac`, `ac3`, `dts`, `truehd`, `atmos`,
+
+        // "marketing" slova z uploadů
+        `topkvalita`, `super\\s*film`, `uhdrdv`, `tuta`
+    ].join('|') +
+    String.raw`)\b`,
+    'ig'
+);
+
+// odstranění file extensions a divných oddělovačů
+function normalizeSeparators(s) {
+    return s
+        .replace(/\.(mp4|mkv|avi|webm)\b/ig, ' ')
+        .replace(/[+_.]/g, ' ')
+        .replace(/[-–—]/g, ' ')
+        .replace(/[!?~]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// odstranit závorky/hranaté závorky, ALE nevyhodit rok když je uvnitř
+function stripBracketsButKeepYear(s) {
+    // (2022) -> nech rok, (CZ Dabing) -> pryč
+    s = s.replace(/\(([^)]*)\)/g, (m, inside) => {
+        const y = inside.match(YEAR_RE);
+        return y ? ` ${y[1]} ` : ' ';
+    });
+    s = s.replace(/\[([^\]]*)\]/g, ' '); // [1830] apod pryč
+    return s;
+}
+
+function cleanForOmdb(raw) {
+    const original = (raw || '').toString().trim();
+    if (!original) return { original, clean: '', year: null, season: null, episode: null, isEpisode: false };
+
+    // 1) basic normalize
+    let s = original;
+    s = stripBracketsButKeepYear(s);
+    s = normalizeSeparators(s);
+    s = stripDiacritics(s);
+
+    // 2) episode detection (seriály)
+    let season = null, episode = null, isEpisode = false;
+    const epm = s.match(EP_RE);
+    if (epm) {
+        isEpisode = true;
+        season = parseInt(epm[1] || epm[3], 10);
+        episode = parseInt(epm[2] || epm[4], 10);
+        // odstraň SxxEyy / 1x02 z názvu
+        s = s.replace(EP_RE, ' ');
+    }
+
+    // 3) year extraction (a potom ho z názvu pryč)
+    let year = null;
+    const ym = s.match(YEAR_RE);
+    if (ym) year = parseInt(ym[1], 10);
+    s = s.replace(YEAR_RE, ' ');
+
+    // 4a) vyházej slepené jazyk+audio tagy typu "CZdabing", "CZDub", "ENsubs" apod.
+    s = s.replace(/\b(?:cz|sk|en)(?:\s*)?(?:dabing|dab|dub|dubbing|subs?|subtitle|titulky|tit)\b/ig, ' ');
+
+    // 4) vyházej junk tagy
+    s = s.replace(JUNK_RE, ' ');
+
+    // 5) poslední dočištění
+    s = s.replace(/\b(sezona|serie|rada)\b/ig, ' '); // "1-série" apod
+    s = s.replace(/\b\d+\s*serie\b/ig, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+
+    return { original, clean: s, year, season, episode, isEpisode };
+}
+
+/**
+ * Kandidáti pro OMDb v pořadí (od nejlepších po fallbacky)
+ * - vždy nakonec raw input uživatele
+ * - navíc: pokud titul končí " 1", zkus i verzi bez té jedničky (Avatar 1 -> Avatar)
+ */
+function buildOmdbCandidates(raw) {
+    const p = cleanForOmdb(raw);
+
+    const candidates = [];
+    const push = (title, year) => {
+        title = (title || '').trim();
+        if (!title) return;
+        const key = `${title.toLowerCase()}|${year || ''}`;
+        if (!candidates.some(c => `${c.title.toLowerCase()}|${c.year || ''}` === key)) {
+            candidates.push({ title, year: year || null });
+        }
+    };
+
+    // hlavní čistý název
+    push(p.clean, p.year);
+
+    // pokud končí "... 1", zkus i bez 1 (typicky Avatar 1)
+    if (/\b1$/.test(p.clean)) push(p.clean.replace(/\b1$/, '').trim(), p.year);
+
+    // bez roku (když rok byl špatně/nejistý)
+    push(p.clean, null);
+
+    // fallback: raw input (uživatel často napíše "správný" název)
+    // lehce normalizovaný (bez přípon), ale nechám obsah
+    const rawNorm = normalizeSeparators(stripDiacritics(raw));
+    push(rawNorm, null);
+
+    return { parsed: p, candidates };
+}
+
+// Legacy helpers (pro kompatibilitu)
+function normalizeBasic(s) {
+    return stripDiacritics(String(s || ''))
+        .toLowerCase()
+        .replace(/\+/g, ' ')
+        .replace(/[._]+/g, ' ')
+        .replace(/[\[\]{}()]/g, ' ')
+        .replace(/[^a-z0-9\s:,-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function extractYearAny(raw) {
+    const m = String(raw || '').match(YEAR_RE);
+    return m ? m[1] : null;
+}
+
+function detectEpisode(raw) {
+    const s = String(raw || '');
+    let m = s.match(EP_RE);
+    if (m) return { season: +(m[1] || m[3]), episode: +(m[2] || m[4]) };
+    return null;
+}
+
+function cleanTitleForSearch(raw) {
+    return cleanForOmdb(raw).clean;
+}
+
+// CZ -> EN aliases
+const TITLE_ALIASES = [
+    { match: /avatar.*legenda.*aangovi/i, title: 'Avatar: The Last Airbender', type: 'series' },
+    { match: /hra.*olihe[nň]/i, title: 'Squid Game', type: 'series' },
+    { match: /hra.*tr[uů]ny/i, title: 'Game of Thrones', type: 'series' },
+    { match: /ml[cč]en[ií].*jeh[nň][aá]tek/i, title: 'The Silence of the Lambs', type: 'movie' },
+    { match: /pod.*tosk[aá]nsk[yý]m.*sluncem/i, title: 'Under the Tuscan Sun', type: 'movie' },
+    { match: /j[ií]st.*meditovat.*milovat/i, title: 'Eat Pray Love', type: 'movie' },
+    { match: /hr[aá][cč]i.*se.*smrt[ií]/i, title: 'Flatliners', type: 'movie' },
+];
+
+function tokenOverlapScore(a, b) {
+    const A = new Set(normalizeBasic(a).split(' ').filter(Boolean));
+    const B = new Set(normalizeBasic(b).split(' ').filter(Boolean));
+    let hit = 0;
+    for (const t of A) if (B.has(t)) hit++;
+    return hit;
+}
+
+async function omdbGet(params) {
+    const url = `https://www.omdbapi.com/?apikey=${OMDB_API_KEY}&${params}`;
+    const r = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    
+    if (r.data?.Response === 'False' && r.data?.Error) {
+        console.log(`[OMDb] Response=False | params="${params}" | error="${r.data.Error}"`);
+    }
+    return r;
+}
+
+function pickImdbSuggestKey(q) {
+    const s = stripDiacritics(String(q || '').trim().toLowerCase());
+    const ch = s[0] || 'a';
+    return /[a-z0-9]/.test(ch) ? ch : 'a';
+}
+
+async function imdbSuggest(query) {
+    const q = stripDiacritics(String(query || '').trim());
+    if (!q) return [];
+
+    const key = pickImdbSuggestKey(q);
+    const url = `https://v2.sg.media-imdb.com/suggestion/${key}/${encodeURIComponent(q)}.json`;
+
+    try {
+        const r = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+        return Array.isArray(r.data?.d) ? r.data.d : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Jednoduchý IMDB resolver - bez regex čištění
+ * Použije se pro původní hledaný výraz od uživatele
+ * Strategie: t= exact match -> s= search -> imdb suggest
+ */
+async function resolveImdbSimple(query, yearHint = null, typeHint = 'movie') {
+    const cleanQuery = stripDiacritics(String(query || '').trim());
+    if (!cleanQuery) return { found: false };
+    
+    // Extrakce roku z query (pokud je přítomen)
+    const yearMatch = cleanQuery.match(/\b(19\d{2}|20\d{2})\b/);
+    const year = yearHint || (yearMatch ? yearMatch[1] : null);
+    
+    // Odstranění roku z query pro čistší hledání
+    const titleWithoutYear = cleanQuery.replace(/\s*\b(19\d{2}|20\d{2})\b\s*/g, ' ').trim();
+    
+    console.log(`[IMDB-SIMPLE] query="${cleanQuery}" | titleWithoutYear="${titleWithoutYear}" | year=${year || 'N/A'}`);
+    
+    // 1) Zkus t= exact match (nejrychlejší a nejpřesnější)
+    const params = `t=${encodeURIComponent(titleWithoutYear)}${year ? `&y=${year}` : ''}&type=${typeHint}`;
+    try {
+        const r = await omdbGet(params);
+        if (r.data?.Response === 'True') {
+            console.log(`[IMDB-SIMPLE][HIT-T] "${titleWithoutYear}" -> "${r.data.Title}" (${r.data.Year}) ${r.data.imdbID}`);
+            return { found: true, data: r.data, method: 't-simple' };
+        }
+    } catch (err) {
+        console.log(`[IMDB-SIMPLE][ERROR-T] ${err.message}`);
+    }
+    
+    // 2) Zkus s= search fallback
+    const sParams = `s=${encodeURIComponent(titleWithoutYear)}&type=${typeHint}`;
+    try {
+        const r2 = await omdbGet(sParams);
+        if (r2.data?.Response === 'True' && Array.isArray(r2.data.Search)) {
+            const searchResults = r2.data.Search.slice(0, 8);
+            
+            // Najdi nejlepší shodu podle skóre
+            let best = null;
+            let bestScore = -1;
+            
+            for (const sr of searchResults) {
+                let score = 0;
+                score += tokenOverlapScore(titleWithoutYear, sr.Title) * 2;
+                if (year && sr.Year && String(sr.Year).includes(String(year))) score += 5;
+                if (typeHint && sr.Type === typeHint) score += 1;
+                if (score > bestScore) { bestScore = score; best = sr; }
+            }
+            
+            if (best?.imdbID && bestScore >= 2) { // Minimální skóre pro přijetí
+                const r3 = await omdbGet(`i=${encodeURIComponent(best.imdbID)}&plot=short`);
+                if (r3.data?.Response === 'True') {
+                    console.log(`[IMDB-SIMPLE][HIT-S] "${titleWithoutYear}" -> "${r3.data.Title}" (${r3.data.Year}) ${r3.data.imdbID} score=${bestScore}`);
+                    return { found: true, data: r3.data, method: 's-simple' };
+                }
+            }
+        }
+    } catch {}
+    
+    // 3) IMDb Suggest API jako poslední možnost
+    const sugg = await imdbSuggest(titleWithoutYear);
+    if (sugg.length) {
+        let best = null, bestScore = -1;
+        
+        for (const it of sugg.slice(0, 8)) {
+            if (!it?.id?.startsWith('tt')) continue;
+            const title = it.l || '';
+            const y = it.y ? String(it.y) : '';
+            
+            let score = tokenOverlapScore(titleWithoutYear, title) * 3;
+            if (year && y && y.includes(String(year))) score += 8;
+            if (typeHint === 'movie' && it.q === 'feature') score += 1;
+            
+            if (score > bestScore) { bestScore = score; best = it; }
+        }
+        
+        if (best?.id && bestScore >= 3) { // Minimální skóre pro přijetí
+            const r4 = await omdbGet(`i=${encodeURIComponent(best.id)}&plot=short`);
+            if (r4.data?.Response === 'True') {
+                console.log(`[IMDB-SIMPLE][HIT-SUGGEST] "${titleWithoutYear}" -> "${r4.data.Title}" (${r4.data.Year}) ${r4.data.imdbID} score=${bestScore}`);
+                return { found: true, data: r4.data, method: 'suggest-simple' };
+            }
+        }
+    }
+    
+    console.log(`[IMDB-SIMPLE][NOTFOUND] "${cleanQuery}"`);
+    return { found: false };
+}
+
+async function resolveImdb(rawTitle, yearHint = null, typeHint = null) {
+    // Build candidates with new pipeline
+    const { parsed, candidates } = buildOmdbCandidates(rawTitle);
+    
+    // Check for alias match
+    let aliased = null;
+    for (const a of TITLE_ALIASES) {
+        if (a.match.test(rawTitle)) {
+            aliased = a;
+            // Add alias as first candidate
+            candidates.unshift({ title: a.title, year: parsed.year });
+            if (!typeHint) typeHint = a.type;
+            break;
+        }
+    }
+    
+    // Determine type
+    const finalType = typeHint || (parsed.isEpisode ? 'series' : 'movie');
+    
+    // Log parsing
+    console.log(
+        `[IMDB][PARSE] raw="${parsed.original}" | clean="${parsed.clean}" | year=${parsed.year || 'none'} | ep=${parsed.isEpisode ? `S${parsed.season}E${parsed.episode}` : 'none'}`
+    );
+    console.log(`[IMDB][TRY] ${candidates.map(c => `"${c.title}"${c.year ? `(${c.year})` : ''}`).join(' -> ')}`);
+    
+    // Try each candidate with t= (exact match)
+    for (const c of candidates) {
+        const params = `t=${encodeURIComponent(c.title)}${c.year ? `&y=${c.year}` : ''}&type=${finalType}`;
+        try {
+            const r = await omdbGet(params);
+            const d = r.data;
+            
+            if (d?.Response === 'True') {
+                console.log(`[IMDB][HIT] using="${c.title}"${c.year ? `(${c.year})` : ''} -> "${d.Title}" (${d.Year}) ${d.imdbID}`);
+                return {
+                    found: true,
+                    method: 't',
+                    queryTitle: c.title,
+                    year: c.year,
+                    type: finalType,
+                    data: d,
+                    ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+                    alias: aliased?.title || null
+                };
+            } else {
+                console.log(`[IMDB][MISS] using="${c.title}"${c.year ? `(${c.year})` : ''} err="${d?.Error || 'unknown'}"`);
+            }
+        } catch (err) {
+            console.log(`[IMDB][ERROR] candidate="${c.title}" | ${err.message}`);
+        }
+    }
+    
+    // Last resort: search fallback with best candidate
+    const bestCandidate = candidates[0];
+    if (bestCandidate) {
+        const sParams = `s=${encodeURIComponent(bestCandidate.title)}&type=${finalType}`;
+        try {
+            const r2 = await omdbGet(sParams);
+            if (r2.data?.Response === 'True' && Array.isArray(r2.data.Search)) {
+                const searchResults = r2.data.Search.slice(0, 8);
+                
+                let best = null;
+                let bestScore = -1;
+                
+                for (const sr of searchResults) {
+                    let score = 0;
+                    score += tokenOverlapScore(bestCandidate.title, sr.Title) * 2;
+                    if (bestCandidate.year && sr.Year && String(sr.Year).includes(String(bestCandidate.year))) score += 5;
+                    if (finalType && sr.Type === finalType) score += 1;
+                    if (score > bestScore) { bestScore = score; best = sr; }
+                }
+                
+                if (best?.imdbID) {
+                    const r3 = await omdbGet(`i=${encodeURIComponent(best.imdbID)}&plot=short`);
+                    if (r3.data?.Response === 'True') {
+                        console.log(`[IMDB][SEARCH-HIT] best="${best.Title}" (${best.Year}) score=${bestScore}`);
+                        return {
+                            found: true,
+                            method: 's->i',
+                            queryTitle: bestCandidate.title,
+                            year: bestCandidate.year,
+                            type: finalType,
+                            data: r3.data,
+                            ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+                            alias: aliased?.title || null,
+                            pickedFromSearch: { bestScore, best, candidates: searchResults.map(c => `${c.Title} (${c.Year}) ${c.imdbID}`) }
+                        };
+                    }
+                }
+            }
+        } catch {}
+    }
+    
+    // === IMDb Suggest fallback (alternativní/lokalizované názvy) ===
+    const suggestQuery = parsed.clean || parsed.original;
+    const sugg = await imdbSuggest(suggestQuery);
+    
+    if (sugg.length) {
+        // vyber nejlepšího kandidáta
+        let best = null, bestScore = -1;
+        
+        for (const it of sugg.slice(0, 12)) {
+            if (!it?.id?.startsWith('tt')) continue;
+            const title = it.l || '';
+            const y = it.y ? String(it.y) : '';
+            
+            let score = tokenOverlapScore(suggestQuery, title) * 3;
+            if (parsed.year && y && y.includes(String(parsed.year))) score += 8;
+            if (finalType && it.q === 'feature' && finalType === 'movie') score += 1;
+            
+            if (score > bestScore) { bestScore = score; best = it; }
+        }
+        
+        if (best?.id) {
+            console.log(`[IMDB][SUGGEST] query="${suggestQuery}" -> pick="${best.l}" (${best.y || 'N/A'}) ${best.id} score=${bestScore}`);
+            const r4 = await omdbGet(`i=${encodeURIComponent(best.id)}&plot=short`);
+            if (r4.data?.Response === 'True') {
+                console.log(`[IMDB][SUGGEST-HIT] ${best.id} -> "${r4.data.Title}" (${r4.data.Year})`);
+                return {
+                    found: true,
+                    method: 'imdb-suggest->i',
+                    queryTitle: suggestQuery,
+                    year: parsed.year,
+                    type: finalType,
+                    data: r4.data,
+                    ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+                    alias: aliased?.title || null
+                };
+            }
+        }
+    }
+    
+    console.log(`[IMDB][NOTFOUND] raw="${parsed.original}"`);
+    return {
+        found: false,
+        method: 'none',
+        queryTitle: parsed.clean,
+        year: parsed.year,
+        type: finalType,
+        ep: parsed.isEpisode ? { season: parsed.season, episode: parsed.episode } : null,
+        alias: aliased?.title || null
+    };
+}
+
+function extractYear(raw) {
+    const m = String(raw).match(/\b(19\d{2}|20\d{2})\b/);
+    return m ? m[1] : null;
+}
+
+function removeEmptyDirsUp(startDir, stopAtDir) {
+  if (!startDir || !stopAtDir) return;
+
+  const stop = path.resolve(stopAtDir);
+  let cur = path.resolve(startDir);
+
+  while (cur.startsWith(stop)) {
+    if (cur === stop) break;
+
+    try {
+      if (!fs.existsSync(cur)) break;
+
+      const entries = fs.readdirSync(cur);
+      if (entries.length > 0) break;      // není prázdná -> končíme
+
+      fs.rmdirSync(cur);                  // smaž jen prázdnou
+      cur = path.dirname(cur);            // jdi o level výš
+    } catch {
+      break;
+    }
+  }
+}
+
+// Helper function to generate Jellyfin-compatible filename
+function generateJellyfinFilename(title, imdbData, type = 'movie', season = null, episode = null) {
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbData?.Title || title || 'Unknown';
+    // Clean title (remove invalid filename characters)
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    
+    if (type === 'movie') {
+        // Movies: Movie Title (Year) [imdbid-ttXXXXXXX]
+        // Jellyfin format: /movies/Movie Title (Year)/Movie Title (Year).ext
+        const year = imdbData?.Year || 'Unknown';
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        return `${cleanTitle} (${year})${suffix}`;
+    } else if (type === 'series') {
+        // Series: Series Name [imdbid-ttXXXXXXX]/Season XX/SeriesName - sXXeYY - Episode Title.ext
+        // Jellyfin format: /tvshows/Series Name (Year)/Season 01/Series Name - s01e01 - Episode Title.ext
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        
+        if (season !== null && episode !== null) {
+            const s = String(season).padStart(2, '0');
+            const e = String(episode).padStart(2, '0');
+            return `${cleanTitle}${suffix} - s${s}e${e}`;
+        }
+        return `${cleanTitle}${suffix}`;
+    }
+    return cleanTitle;
+}
+
+// Helper function to get Jellyfin directory structure
+function getJellyfinPath(title, imdbData, type = 'movie', season = null) {
+    const paths = getDownloadPaths();
+    
+    // Použij název z IMDB pokud je k dispozici, jinak z původního titulu
+    const rawTitle = imdbData?.Title || title || 'Unknown';
+    const cleanTitle = rawTitle.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+    
+    if (type === 'movie') {
+        // Filmy se ukládají přímo do movies složky (bez podsložky)
+        return paths.movies;
+    } else if (type === 'series') {
+        const imdbId = imdbData?.imdbID || '';
+        const suffix = imdbId ? ` [imdbid-${imdbId}]` : '';
+        const seriesDir = `${cleanTitle}${suffix}`;
+        
+        if (season !== null) {
+            const seasonDir = `Season ${String(season).padStart(2, '0')}`;
+            return path.join(paths.series, seriesDir, seasonDir);
+        }
+        return path.join(paths.series, seriesDir);
+    }
+    return paths.movies;
+}
+
+// Series Download endpoint - downloads multiple episodes
+app.post('/api/download/series', async (req, res) => {
+    const { seriesTitle, seriesImdbId, seriesImdbData, episodes } = req.body;
+    
+    if (!seriesTitle || !episodes || episodes.length === 0) {
+        return res.status(400).json({ success: false, error: 'Chybí povinné parametry' });
+    }
+    
+    // Create job for series download
+    const job = createJob({ 
+        title: seriesTitle, 
+        type: 'series-batch',
+        totalEpisodes: episodes.length,
+        completedEpisodes: 0
+    });
+    cleanupJobLater(job.jobId, 2 * 60 * 60 * 1000); // 2 hours for series
+    
+    // Return jobId immediately
+    res.json({ success: true, jobId: job.jobId });
+    
+    // Process episodes sequentially
+    (async () => {
+        job.status = 'downloading';
+        job.abortController = new AbortController();
+        
+        const paths = getDownloadPaths();
+        const cleanSeriesTitle = seriesTitle.replace(/[<>:"/\\|?*]/g, '').trim();
+        const seriesSuffix = seriesImdbId ? ` [imdbid-${seriesImdbId}]` : '';
+        const seriesDir = path.join(paths.series, `${cleanSeriesTitle}${seriesSuffix}`);
+        
+        job.downloadDir = seriesDir;
+        
+        let completedEpisodes = 0;
+        
+        try {
+            for (let i = 0; i < episodes.length; i++) {
+                // Check if canceled
+                if (job.status === 'canceled') {
+                    emitJob(job, { type: 'canceled', jobId: job.jobId });
+                    return;
+                }
+                
+                const ep = episodes[i];
+                const seasonStr = String(ep.season).padStart(2, '0');
+                const episodeStr = String(ep.episode).padStart(2, '0');
+                
+                // Emit episode start
+                emitJob(job, {
+                    type: 'episode-start',
+                    jobId: job.jobId,
+                    season: ep.season,
+                    episode: ep.episode,
+                    episodeTitle: ep.episodeTitle || ep.prehrajtoTitle,
+                    currentIndex: i + 1,
+                    totalEpisodes: episodes.length
+                });
+                
+                // Get episode-specific IMDB ID
+                let episodeImdbId = null;
+                try {
+                    const episodeUrl = `http://www.omdbapi.com/?apikey=${OMDB_API_KEY}&i=${seriesImdbId}&Season=${ep.season}&Episode=${ep.episode}`;
+                    const episodeResponse = await axios.get(episodeUrl, { timeout: 10000 });
+                    if (episodeResponse.data.Response === 'True') {
+                        episodeImdbId = episodeResponse.data.imdbID;
+                        console.log(`📺 Got IMDB ID for S${seasonStr}E${episodeStr}: ${episodeImdbId}`);
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ Could not get episode IMDB ID: ${e.message}`);
+                }
+                
+                // Create season directory
+                const seasonDir = path.join(seriesDir, `Season ${seasonStr}`);
+                if (!fs.existsSync(seasonDir)) {
+                    fs.mkdirSync(seasonDir, { recursive: true });
+                }
+                
+                // Generate filename: "Název seriálu sXXeXX [imdbid-XXXXXX].ext"
+                const episodeSuffix = episodeImdbId ? ` [imdbid-${episodeImdbId}]` : '';
+                const urlExt = ep.videoUrl.match(/\.(mp4|mkv|avi|webm)(?:[?#]|$)/i);
+                const videoExt = urlExt ? urlExt[1] : 'mp4';
+                const episodeFilename = `${cleanSeriesTitle} s${seasonStr}e${episodeStr}${episodeSuffix}.${videoExt}`;
+                const episodePath = path.join(seasonDir, episodeFilename);
+                
+                console.log(`📥 Downloading: ${episodeFilename}`);
+                
+                // Download the episode
+                const videoResponse = await axios({
+                    method: 'GET',
+                    url: ep.videoUrl,
+                    responseType: 'stream',
+                    timeout: 0,
+                    maxRedirects: 5,
+                    signal: job.abortController.signal,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0',
+                        'Referer': 'https://prehrajto.cz/',
+                        'Accept': '*/*',
+                        'Connection': 'keep-alive'
+                    }
+                });
+                
+                const writeStream = fs.createWriteStream(episodePath);
+                const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
+                
+                let downloadedBytes = 0;
+                let lastTickBytes = 0;
+                let lastTickTime = Date.now();
+                const startTime = Date.now();
+                
+                videoResponse.data.on('data', (chunk) => {
+                    downloadedBytes += chunk.length;
+                    
+                    const now = Date.now();
+                    if (now - lastTickTime >= 1000) {
+                        const dt = (now - lastTickTime) / 1000;
+                        const dB = downloadedBytes - lastTickBytes;
+                        const speed = dt > 0 ? (dB / dt) : 0;
+                        const etaSec = (totalBytes > 0 && speed > 0) ? ((totalBytes - downloadedBytes) / speed) : null;
+                        const progress = totalBytes > 0 ? (downloadedBytes / totalBytes * 100) : 0;
+                        
+                        emitJob(job, {
+                            type: 'progress',
+                            jobId: job.jobId,
+                            downloadedBytes,
+                            totalBytes,
+                            progress,
+                            speedBps: speed,
+                            etaSec,
+                            currentEpisode: i + 1,
+                            totalEpisodes: episodes.length
+                        });
+                        
+                        lastTickBytes = downloadedBytes;
+                        lastTickTime = now;
+                    }
+                });
+                
+                await pipelineAsync(videoResponse.data, writeStream);
+                
+                completedEpisodes++;
+                job.completedEpisodes = completedEpisodes;
+                
+                console.log(`✅ Episode downloaded: ${episodeFilename}`);
+                
+                emitJob(job, {
+                    type: 'episode-done',
+                    jobId: job.jobId,
+                    season: ep.season,
+                    episode: ep.episode,
+                    filename: episodeFilename,
+                    completedEpisodes: completedEpisodes,
+                    totalEpisodes: episodes.length
+                });
+            }
+            
+            // All episodes downloaded
+            job.status = 'done';
+            
+            emitJob(job, {
+                type: 'done',
+                jobId: job.jobId,
+                seriesTitle: seriesTitle,
+                path: seriesDir,
+                totalEpisodes: episodes.length,
+                completedEpisodes: completedEpisodes
+            });
+            
+            console.log(`✅ Series download complete: ${seriesTitle} (${completedEpisodes} episodes)`);
+            
+        } catch (error) {
+            if (job.status === 'canceled') {
+                emitJob(job, { type: 'canceled', jobId: job.jobId });
+                return;
+            }
+            
+            job.status = 'error';
+            console.error(`❌ Series download error: ${error.message}`);
+            
+            emitJob(job, {
+                type: 'error',
+                jobId: job.jobId,
+                error: error.message || 'Stahování selhalo'
+            });
+        }
+    })();
+});
+
+// Download endpoint
+app.post('/api/download', async (req, res) => {
+    const { videoUrl, title, imdbData, type = 'movie', season = null, episode = null } = req.body;
+
+    if (!videoUrl || !title) {
+        return res.status(400).json({ success: false, error: 'Chybí povinné parametry (videoUrl, title)' });
+    }
+
+    // vytvoř job
+    const job = createJob({ title, type });
+    cleanupJobLater(job.jobId);
+
+    // okamžitě vrať jobId
+    res.json({ success: true, jobId: job.jobId });
+
+    // a teď teprve dělej download
+    (async () => {
+        let videoPath = null;
+
+        try {
+            job.status = 'downloading';
+            emitJob(job, { type: 'progress', jobId: job.jobId, progress: 0, downloadedBytes: 0, totalBytes: 0, speedBps: 0, etaSec: null });
+
+            // Get video file extension from URL
+            const urlExt = videoUrl.match(/\.(mp4|mkv|avi|webm)(?:[?#]|$)/i);
+            const videoExt = urlExt ? urlExt[1] : 'mp4';
+
+            const downloadDir = getJellyfinPath(title, imdbData, type, season);
+            job.downloadDir = downloadDir; // aby to cancel endpoint vždycky znal
+            const baseFilename = generateJellyfinFilename(title, imdbData, type, season, episode);
+            const videoFilename = `${baseFilename}.${videoExt}`;
+            videoPath = path.join(downloadDir, videoFilename);
+
+            if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
+
+            job.abortController = new AbortController();
+            job.createdFiles = [];
+
+            const videoResponse = await axios({
+                method: 'GET',
+                url: videoUrl,
+                responseType: 'stream',
+                timeout: 0,
+                maxRedirects: 5,
+                signal: job.abortController.signal,   // <-- DŮLEŽITÉ
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Referer': 'https://prehrajto.cz/',
+                    'Accept': '*/*',
+                    'Connection': 'keep-alive'
+                }
+            });
+            job.httpStream = videoResponse.data;
+
+            const writeStream = fs.createWriteStream(videoPath);
+            job.writeStream = writeStream;
+            job.videoPath = videoPath;
+            job.downloadDir = downloadDir;
+
+
+            const totalBytes = parseInt(videoResponse.headers['content-length']) || 0;
+
+            let downloadedBytes = 0;
+            let lastTickBytes = 0;
+            let lastTickTime = Date.now();
+            const startTime = Date.now();
+
+            videoResponse.data.on('data', (chunk) => {
+                downloadedBytes += chunk.length;
+
+                const now = Date.now();
+                if (now - lastTickTime >= 1000) {
+                    const dt = (now - lastTickTime) / 1000;
+                    const dB = downloadedBytes - lastTickBytes;
+                    const speed = dt > 0 ? (dB / dt) : 0;
+                    const etaSec = (totalBytes > 0 && speed > 0) ? ((totalBytes - downloadedBytes) / speed) : null;
+                    const progress = totalBytes > 0 ? (downloadedBytes / totalBytes * 100) : 0;
+
+                    emitJob(job, {
+                        type: 'progress',
+                        jobId: job.jobId,
+                        downloadedBytes,
+                        totalBytes,
+                        progress,
+                        speedBps: speed,
+                        etaSec,
+                        elapsedSec: (now - startTime) / 1000
+                    });
+
+                    lastTickBytes = downloadedBytes;
+                    lastTickTime = now;
+                }
+            });
+
+            await pipelineAsync(videoResponse.data, writeStream);
+
+            // Pro seriály vytvoř metadata NFO soubor
+            let metadataFilename = null;
+            if (type === 'series') {
+                metadataFilename = `${baseFilename}.nfo`;
+                const metadataPath = path.join(downloadDir, metadataFilename);
+
+                const metadata = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<tvshow>
+  <title>${escapeXml(imdbData?.Title || title)}</title>
+  <year>${imdbData?.Year || ''}</year>
+  <plot><![CDATA[${imdbData?.Plot || ''}]]></plot>
+  <genre>${imdbData?.Genre || ''}</genre>
+  <uniqueid type="imdb" default="true">${imdbData?.imdbID || ''}</uniqueid>
+  <id>${imdbData?.imdbID || ''}</id>
+  <imdbid>${imdbData?.imdbID || ''}</imdbid>
+  <rating>${imdbData?.imdbRating || ''}</rating>
+</tvshow>`;
+
+                fs.writeFileSync(metadataPath, metadata, 'utf8');
+                job.createdFiles.push(metadataPath);
+            }
+            // Pro filmy se NFO nevytváří - Jellyfin používá [imdbid-xxx] v názvu souboru
+
+            job.status = 'done';
+
+            emitJob(job, {
+                type: 'done',
+                jobId: job.jobId,
+                files: {
+                    video: path.basename(videoPath),
+                    metadata: metadataFilename
+                },
+                path: downloadDir,
+                jellyfinReady: JELLYFIN_DIR !== null,
+                instructions: JELLYFIN_DIR
+                    ? 'Soubory jsou připravené pro Jellyfin. Spusťte Library Scan v Jellyfin.'
+                    : `Soubory jsou v: ${downloadDir}. Přesuněte je do Jellyfin knihovny a spusťte Library Scan.`
+            });
+
+        } catch (error) {
+            // Pokud už někdo mezitím dal cancel, ber to jako "canceled", ne jako error
+            if (job.status === 'canceled') {
+                // smaž prázdnou složku (soubory už endpoint cancel zkusil mazat)
+                const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+                removeEmptyDirsUp(job.downloadDir, baseDir);
+
+                emitJob(job, {
+                    type: 'canceled',
+                    jobId: job.jobId,
+                    message: 'Stahování bylo zrušeno.'
+                });
+                return;
+            }
+
+            job.status = 'error';
+
+            // clean up partial file
+            if (videoPath && fs.existsSync(videoPath)) {
+                try { fs.unlinkSync(videoPath); } catch {}
+            }
+
+            emitJob(job, {
+                type: 'error',
+                jobId: job.jobId,
+                error: error?.message || 'Stahování selhalo'
+            });
+        }
+    })();
+});
+
+app.post('/api/download/cancel/:jobId', async (req, res) => {
+    const job = downloadJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ success: false, error: 'Job nenalezen' });
+
+    // pokud už je hotovo/failed, nemá co rušit
+    if (job.status === 'done') {
+        return res.status(409).json({ success: false, error: 'Download už je dokončen' });
+    }
+
+    job.status = 'canceled';
+
+    // 1) abort HTTP request (axios)
+    try { job.abortController?.abort(); } catch {}
+
+    // 2) znič streamy
+    try { job.httpStream?.destroy?.(); } catch {}
+    try { job.writeStream?.destroy?.(); } catch {}
+
+    // 3) smaž rozpracované soubory
+    const toDelete = [];
+
+    if (job.videoPath) toDelete.push(job.videoPath);
+
+    if (Array.isArray(job.createdFiles)) {
+        for (const fp of job.createdFiles) toDelete.push(fp);
+    }
+
+    for (const fp of toDelete) {
+        try {
+            if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
+        } catch {}
+    }
+
+    // ✅ smaž prázdnou složku (a prázdné rodiče)
+    const baseDir = JELLYFIN_DIR || DOWNLOADS_DIR;
+    removeEmptyDirsUp(job.downloadDir, baseDir);
+
+    emitJob(job, {
+        type: 'canceled',
+        jobId: job.jobId,
+        message: 'Stahování zrušeno. Částečné soubory byly smazány.'
+    });
+
+    return res.json({ success: true });
 });
 
 // Get downloads list
@@ -662,6 +1901,16 @@ app.delete('/api/downloads/:filename', (req, res) => {
 });
 
 // Pomocné funkce (stejné jako v Ruby)
+function escapeXml(unsafe) {
+    if (!unsafe) return '';
+    return unsafe.toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
 function durationToSeconds(durationStr) {
   if (!durationStr || durationStr === '') return 0;
   
@@ -690,6 +1939,173 @@ function filesizeToMB(filesizeStr) {
     default: return 0;
   }
 }
+
+// ============================================
+// SETTINGS API
+// ============================================
+
+// Get current settings
+app.get('/api/settings', (req, res) => {
+    try {
+        const paths = getDownloadPaths();
+        res.json({
+            success: true,
+            settings: {
+                moviesDir: paths.movies,
+                seriesDir: paths.series
+            }
+        });
+    } catch (error) {
+        console.error('Error reading settings:', error);
+        res.status(500).json({ success: false, error: 'Chyba při čtení nastavení' });
+    }
+});
+
+// Save settings
+app.post('/api/settings', (req, res) => {
+    try {
+        const { moviesDir, seriesDir } = req.body;
+        
+        if (!moviesDir || !seriesDir) {
+            return res.status(400).json({ success: false, error: 'Musíte zadat obě cesty' });
+        }
+        
+        // Read existing .env content
+        let envContent = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
+        const envLines = envContent.split('\n');
+        
+        // Parse existing env vars - preserve order and handle values with = signs
+        const envVars = new Map();
+        envLines.forEach(line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine && !trimmedLine.startsWith('#')) {
+                const eqIndex = trimmedLine.indexOf('=');
+                if (eqIndex > 0) {
+                    const key = trimmedLine.substring(0, eqIndex).trim();
+                    const value = trimmedLine.substring(eqIndex + 1);
+                    envVars.set(key, value);
+                }
+            }
+        });
+        
+        // Update paths
+        envVars.set('MOVIES_DIR', moviesDir);
+        envVars.set('SERIES_DIR', seriesDir);
+        
+        // Rebuild .env content preserving order
+        const newEnvContent = Array.from(envVars.entries())
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+        
+        // Write back to .env
+        fs.writeFileSync(ENV_PATH, newEnvContent, 'utf8');
+        
+        // Create directories if they don't exist
+        if (!fs.existsSync(moviesDir)) {
+            fs.mkdirSync(moviesDir, { recursive: true });
+        }
+        if (!fs.existsSync(seriesDir)) {
+            fs.mkdirSync(seriesDir, { recursive: true });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Nastavení bylo uloženo',
+            settings: {
+                moviesDir,
+                seriesDir
+            }
+        });
+    } catch (error) {
+        console.error('Error saving settings:', error);
+        res.status(500).json({ success: false, error: 'Chyba při ukládání nastavení: ' + error.message });
+    }
+});
+
+// Browse directory endpoint
+app.get('/api/browse-directory', (req, res) => {
+    try {
+        let dirPath = req.query.path || '';
+        
+        // If no path provided, return drives on Windows or root on Unix
+        if (!dirPath) {
+            if (process.platform === 'win32') {
+                // Get Windows drives
+                const { execSync } = require('child_process');
+                try {
+                    const output = execSync('wmic logicaldisk get name', { encoding: 'utf8' });
+                    const drives = output.split('\n')
+                        .map(line => line.trim())
+                        .filter(line => /^[A-Z]:$/.test(line))
+                        .map(drive => ({
+                            name: drive,
+                            path: drive + '\\',
+                            isDirectory: true
+                        }));
+                    return res.json({
+                        success: true,
+                        currentPath: '',
+                        parentPath: null,
+                        items: drives
+                    });
+                } catch {
+                    dirPath = 'C:\\';
+                }
+            } else {
+                dirPath = '/';
+            }
+        }
+        
+        // Normalize path
+        dirPath = path.resolve(dirPath);
+        
+        // Check if directory exists
+        if (!fs.existsSync(dirPath)) {
+            return res.status(404).json({ success: false, error: 'Složka neexistuje' });
+        }
+        
+        // Check if it's a directory
+        const stats = fs.statSync(dirPath);
+        if (!stats.isDirectory()) {
+            return res.status(400).json({ success: false, error: 'Cesta není složka' });
+        }
+        
+        // Read directory contents
+        const items = [];
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        
+        for (const entry of entries) {
+            // Skip hidden files/folders (starting with .)
+            if (entry.name.startsWith('.')) continue;
+            
+            if (entry.isDirectory()) {
+                items.push({
+                    name: entry.name,
+                    path: path.join(dirPath, entry.name),
+                    isDirectory: true
+                });
+            }
+        }
+        
+        // Sort alphabetically
+        items.sort((a, b) => a.name.localeCompare(b.name));
+        
+        // Get parent path
+        const parentPath = path.dirname(dirPath);
+        const hasParent = parentPath !== dirPath;
+        
+        res.json({
+            success: true,
+            currentPath: dirPath,
+            parentPath: hasParent ? parentPath : null,
+            items: items
+        });
+        
+    } catch (error) {
+        console.error('Error browsing directory:', error);
+        res.status(500).json({ success: false, error: 'Chyba při procházení složky: ' + error.message });
+    }
+});
 
 // Spuštění serveru
 app.listen(PORT, () => {

@@ -6,4 +6,4 @@ Thumbs.db
 dist/
 build/
 *.tmp
-downloads/
+downloads/*
