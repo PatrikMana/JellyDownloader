@@ -68,13 +68,29 @@ const SettingsModal = ({ isOpen, onClose }) => {
     };
 
     const navigateUp = () => {
-        const parts = currentPath.split(/[/\\]/).filter(Boolean);
-        if (parts.length > 1) {
-            parts.pop();
-            const newPath = parts.join('/');
-            browsePath(newPath.startsWith('/') ? newPath : '/' + newPath);
-        } else if (parts.length === 1) {
-            browsePath('/');
+        // Use parentPath from API response if available
+        if (currentPath) {
+            // For Windows paths like C:\Users\Patrik, go to parent
+            const isWindows = currentPath.includes('\\') || /^[A-Z]:/.test(currentPath);
+            
+            if (isWindows) {
+                const parts = currentPath.split('\\').filter(Boolean);
+                if (parts.length > 1) {
+                    parts.pop();
+                    const newPath = parts.join('\\');
+                    browsePath(newPath);
+                }
+            } else {
+                // Unix paths
+                const parts = currentPath.split('/').filter(Boolean);
+                if (parts.length > 1) {
+                    parts.pop();
+                    const newPath = '/' + parts.join('/');
+                    browsePath(newPath);
+                } else if (parts.length === 1) {
+                    browsePath('/');
+                }
+            }
         }
     };
 
@@ -123,7 +139,7 @@ const SettingsModal = ({ isOpen, onClose }) => {
                                         className="settings-input"
                                         value={settings.moviesDir}
                                         onChange={e => setSettings(prev => ({ ...prev, moviesDir: e.target.value }))}
-                                        placeholder="/cesta/k/filmům"
+                                        placeholder={settings.moviesDir || 'Klikněte na Procházet pro výběr složky'}
                                     />
                                     <button 
                                         className="settings-browse-btn"
@@ -144,7 +160,7 @@ const SettingsModal = ({ isOpen, onClose }) => {
                                         className="settings-input"
                                         value={settings.seriesDir}
                                         onChange={e => setSettings(prev => ({ ...prev, seriesDir: e.target.value }))}
-                                        placeholder="/cesta/k/seriálům"
+                                        placeholder={settings.seriesDir || 'Klikněte na Procházet pro výběr složky'}
                                     />
                                     <button 
                                         className="settings-browse-btn"
@@ -224,7 +240,7 @@ const SettingsModal = ({ isOpen, onClose }) => {
                                     <div 
                                         key={index}
                                         className="file-browser-item"
-                                        onDoubleClick={() => selectFolder(item)}
+                                        onClick={() => selectFolder(item)}
                                     >
                                         <div className="file-browser-item-icon folder">
                                             <i className="fas fa-folder"></i>
