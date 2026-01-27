@@ -10,7 +10,6 @@ const MovieMode = ({ isActive }) => {
     const [results, setResults] = useState([]);
     const [selectedItems, setSelectedItems] = useState([]);
     const [sortBy, setSortBy] = useState('smart');
-    const [languageFilter, setLanguageFilter] = useState('cz');
     const [qualityModal, setQualityModal] = useState({ open: false, movie: null, loading: false });
     const { showError, showInfo, showWarning, showSuccess } = useToast();
     const { startDownload } = useDownload();
@@ -29,38 +28,9 @@ const MovieMode = ({ isActive }) => {
         return value * (multipliers[unit] || 1);
     };
 
-    // Filter results by language
-    const filterByLanguage = (results, language) => {
-        if (!results || results.length === 0) return results;
-        if (language === 'all') return results;
-        
-        if (language === 'cz') {
-            return results.filter(movie => {
-                const title = movie.title.toLowerCase();
-                // Exclude clear English with subtitles
-                if (/(?:eng|english)/.test(title) && /(?:titulky|sub)/.test(title)) return false;
-                if (/\b(?:original)/.test(title) && /(?:titulky|sub)/.test(title)) return false;
-                return true;
-            });
-        } else if (language === 'en') {
-            return results.filter(movie => {
-                const title = movie.title.toLowerCase();
-                // Exclude Czech/Slovak
-                if (/(?:cz|czech|český|české|cesky|čeština|sk|slovak|sloven)/.test(title)) return false;
-                if (/(?:dabing|dab\b|dabovaný|dabováno)/.test(title)) return false;
-                // Include only explicit English markers
-                if (/\b(?:eng|english)\b/.test(title)) return true;
-                if (/\b(?:original|orig)\b/.test(title)) return true;
-                if (/(?:titulky|tit\b|sub|subs|subtitle)\b/.test(title)) return true;
-                return false;
-            });
-        }
-        return results;
-    };
-
-    // Sort and filter results
+    // Sort results
     const processedResults = useMemo(() => {
-        let filtered = filterByLanguage([...results], languageFilter);
+        let filtered = [...results];
 
         // Sort results
         filtered.sort((a, b) => {
@@ -95,7 +65,7 @@ const MovieMode = ({ isActive }) => {
         });
 
         return filtered;
-    }, [results, sortBy, languageFilter]);
+    }, [results, sortBy]);
 
     const handleSearch = async (e) => {
         e.preventDefault();
@@ -111,36 +81,34 @@ const MovieMode = ({ isActive }) => {
         try {
             showInfo('Vyhledávám', `Hledám "${searchQuery}" na prehrajto.cz...`);
             
-            // KROK 1: Pokud je jazyk čeština, najdi originální název přes TMDB
+            // KROK 1: Najdi originální název přes TMDB
             let imdbData = null;
             let originalTitle = searchQuery.trim();
             
-            if (languageFilter === 'cz') {
-                try {
-                    showInfo('TMDB', 'Hledám originální název...');
-                    const tmdbResult = await searchApi.translateTitle(searchQuery);
+            try {
+                showInfo('TMDB', 'Hledám originální název...');
+                const tmdbResult = await searchApi.translateTitle(searchQuery);
+                
+                if (tmdbResult.success && tmdbResult.originalTitle) {
+                    originalTitle = tmdbResult.originalTitle;
+                    showInfo('TMDB', `Originální název: ${originalTitle}`);
                     
-                    if (tmdbResult.success && tmdbResult.originalTitle) {
-                        originalTitle = tmdbResult.originalTitle;
-                        showInfo('TMDB', `Originální název: ${originalTitle}`);
-                        
-                        // Pokud TMDB vrátil IMDB ID, použij ho
-                        if (tmdbResult.imdbId) {
-                            try {
-                                const response = await fetch(`/api/imdb-by-id/${tmdbResult.imdbId}`);
-                                const data = await response.json();
-                                if (data.success && data.data) {
-                                    imdbData = data.data;
-                                    showSuccess('IMDB', `Nalezen: ${imdbData.Title} (${imdbData.Year})`);
-                                }
-                            } catch (e) {
-                                console.warn('IMDB by ID lookup failed:', e);
+                    // Pokud TMDB vrátil IMDB ID, použij ho
+                    if (tmdbResult.imdbId) {
+                        try {
+                            const response = await fetch(`/api/imdb-by-id/${tmdbResult.imdbId}`);
+                            const data = await response.json();
+                            if (data.success && data.data) {
+                                imdbData = data.data;
+                                showSuccess('IMDB', `Nalezen: ${imdbData.Title} (${imdbData.Year})`);
                             }
+                        } catch (e) {
+                            console.warn('IMDB by ID lookup failed:', e);
                         }
                     }
-                } catch (e) {
-                    console.warn('TMDB translation failed:', e);
                 }
+            } catch (e) {
+                console.warn('TMDB translation failed:', e);
             }
             
             // KROK 2: Pokud nemáme IMDB data, zkus hledat podle názvu
@@ -176,8 +144,7 @@ const MovieMode = ({ isActive }) => {
 
                 setResults(transformedResults);
                 
-                const filteredCount = filterByLanguage(transformedResults, languageFilter).length;
-                showSuccess('Nalezeno', `${filteredCount} výsledků (z ${transformedResults.length})`);
+                showSuccess('Nalezeno', `${transformedResults.length} výsledků`);
             } else {
                 showWarning('Nenalezeno', 'Žádné výsledky pro tento dotaz');
             }
@@ -375,32 +342,8 @@ const MovieMode = ({ isActive }) => {
                         </div>
                     </form>
 
-                    {/* Language Filter */}
+                    {/* Sort Filter */}
                     <div className="filter-row">
-                        <div className="filter-group">
-                            <label>Jazyk:</label>
-                            <div className="filter-buttons">
-                                <button 
-                                    className={`filter-btn ${languageFilter === 'cz' ? 'active' : ''}`}
-                                    onClick={() => setLanguageFilter('cz')}
-                                >
-                                    🇨🇿 Čeština
-                                </button>
-                                <button 
-                                    className={`filter-btn ${languageFilter === 'en' ? 'active' : ''}`}
-                                    onClick={() => setLanguageFilter('en')}
-                                >
-                                    🇬🇧 English
-                                </button>
-                                <button 
-                                    className={`filter-btn ${languageFilter === 'all' ? 'active' : ''}`}
-                                    onClick={() => setLanguageFilter('all')}
-                                >
-                                    🌐 Vše
-                                </button>
-                            </div>
-                        </div>
-
                         <div className="filter-group">
                             <label>Řazení:</label>
                             <select 
@@ -408,9 +351,9 @@ const MovieMode = ({ isActive }) => {
                                 value={sortBy}
                                 onChange={(e) => setSortBy(e.target.value)}
                             >
-                                <option value="smart">🎯 Chytré (kvalita)</option>
-                                <option value="largest">📦 Největší</option>
-                                <option value="smallest">📄 Nejmenší</option>
+                                <option value="smart">Chytré (kvalita)</option>
+                                <option value="largest">Největší</option>
+                                <option value="smallest">Nejmenší</option>
                             </select>
                         </div>
                     </div>
