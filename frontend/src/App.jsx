@@ -6,6 +6,7 @@ import Hero from './components/Hero';
 import ModeSelection from './components/ModeSelection';
 import MovieMode from './components/MovieMode';
 import SeriesMode from './components/SeriesMode';
+import AnimeMode from './components/AnimeMode';
 import DownloadHUD from './components/DownloadHUD';
 import ToastContainer from './components/ToastContainer';
 import SettingsModal from './components/SettingsModal';
@@ -51,6 +52,7 @@ function App() {
                         
                         <MovieMode isActive={currentMode === 'movie'} />
                         <SeriesMode isActive={currentMode === 'series'} />
+                        <AnimeMode isActive={currentMode === 'anime'} />
                     </main>
 
                     <DownloadHUD />

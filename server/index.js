@@ -18,7 +18,8 @@ const {
     downloadRoutes,
     imdbRoutes,
     tmdbRoutes,
-    settingsRoutes
+    settingsRoutes,
+    animeRoutes
 } = require('./routes');
 
 // Initialize Express app
@@ -50,6 +51,7 @@ app.use('/api/download', downloadRoutes);
 app.use('/api/imdb', imdbRoutes);
 app.use('/api/tmdb', tmdbRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/anime', animeRoutes);
 
 // Direct route aliases for backward compatibility
 app.get('/api/imdb-by-id/:imdbId', (req, res, next) => {

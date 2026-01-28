@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const { pipeline } = require('stream');
 const { promisify } = require('util');
+const { spawn } = require('child_process');
+const ffmpegPath = require('ffmpeg-static');
 const pipelineAsync = promisify(pipeline);
 
 const config = require('../config');
@@ -456,9 +458,403 @@ async function processSeriesDownload(job, options) {
     }
 }
 
+/**
+ * Download HLS stream using ffmpeg
+ * @param {Object} options - Download options
+ * @returns {Promise<Object>} Download result
+ */
+async function downloadHLS(options) {
+    const { hlsUrl, title, imdbData, type = 'series', season = 1, episode = 1, referer } = options;
+    
+    // Create job
+    const job = createJob({ 
+        title, 
+        type: type === 'series' ? 'anime-episode' : type
+    });
+    scheduleJobCleanup(job.jobId);
+    
+    // Start async download
+    processHLSDownload(job, options);
+    
+    return { jobId: job.jobId };
+}
+
+/**
+ * Process HLS download using ffmpeg
+ * @param {Object} job - Job object
+ * @param {Object} options - Download options
+ */
+async function processHLSDownload(job, options) {
+    const { hlsUrl, title, imdbData, type = 'series', season = 1, episode = 1, referer } = options;
+    let videoPath = null;
+    
+    try {
+        job.status = 'downloading';
+        emitJobEvent(job, { 
+            type: 'progress', 
+            jobId: job.jobId, 
+            progress: 0, 
+            message: 'Starting HLS download...'
+        });
+        
+        // Setup paths
+        const downloadDir = getDownloadDir(title, imdbData, type, season);
+        job.downloadDir = downloadDir;
+        
+        const baseFilename = generateFilename(title, imdbData, type, season, episode);
+        const videoFilename = `${baseFilename}.mp4`;
+        videoPath = path.join(downloadDir, videoFilename);
+        
+        // Create directory
+        if (!fs.existsSync(downloadDir)) {
+            fs.mkdirSync(downloadDir, { recursive: true });
+        }
+        
+        logger.info(`Starting HLS download: ${videoFilename}`);
+        logger.info(`HLS URL: ${hlsUrl}`);
+        logger.info(`Referer: ${referer || 'none'}`);
+        
+        // Build ffmpeg arguments with proper headers
+        const ffmpegArgs = [
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ];
+        
+        // Add referer header if provided
+        if (referer) {
+            ffmpegArgs.push('-headers', `Referer: ${referer}\r\n`);
+        }
+        
+        ffmpegArgs.push(
+            '-i', hlsUrl,
+            '-c', 'copy',
+            '-bsf:a', 'aac_adtstoasc',
+            '-y',
+            videoPath
+        );
+        
+        const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
+        job.ffmpegProcess = ffmpeg;
+        
+        let lastProgress = 0;
+        let duration = 0;
+        
+        ffmpeg.stderr.on('data', (data) => {
+            const output = data.toString();
+            
+            // Parse duration
+            const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+            if (durationMatch) {
+                const [, hours, minutes, seconds] = durationMatch;
+                duration = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+            }
+            
+            // Parse progress
+            const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2})/);
+            if (timeMatch && duration > 0) {
+                const [, hours, minutes, seconds] = timeMatch;
+                const currentTime = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+                const progress = Math.min(99, (currentTime / duration) * 100);
+                
+                if (progress > lastProgress + 1) {
+                    lastProgress = progress;
+                    emitJobEvent(job, {
+                        type: 'progress',
+                        jobId: job.jobId,
+                        progress,
+                        message: `Downloading: ${Math.round(progress)}%`
+                    });
+                }
+            }
+        });
+        
+        await new Promise((resolve, reject) => {
+            ffmpeg.on('close', (code) => {
+                if (code === 0) {
+                    resolve();
+                } else {
+                    reject(new Error(`ffmpeg exited with code ${code}`));
+                }
+            });
+            
+            ffmpeg.on('error', (err) => {
+                reject(err);
+            });
+        });
+        
+        job.status = 'done';
+        logger.info(`HLS download complete: ${videoFilename}`);
+        
+        emitJobEvent(job, {
+            type: 'done',
+            jobId: job.jobId,
+            filename: videoFilename,
+            path: downloadDir
+        });
+        
+    } catch (error) {
+        if (job.status === 'canceled') {
+            const paths = config.getDownloadPaths();
+            removeEmptyDirsUp(job.downloadDir, paths.series);
+            
+            emitJobEvent(job, {
+                type: 'canceled',
+                jobId: job.jobId,
+                message: 'Download canceled'
+            });
+            return;
+        }
+        
+        job.status = 'error';
+        logger.error(`HLS download failed: ${error.message}`);
+        
+        // Clean up partial file
+        if (videoPath && fs.existsSync(videoPath)) {
+            try { fs.unlinkSync(videoPath); } catch {}
+        }
+        
+        emitJobEvent(job, {
+            type: 'error',
+            jobId: job.jobId,
+            error: error?.message || 'HLS download failed'
+        });
+    }
+}
+
+/**
+ * Download anime series episodes using HLS (batch download like series)
+ * @param {Object} options - Anime download options
+ * @returns {Promise<Object>} Download result with jobId
+ */
+async function downloadAnimeSeries(options) {
+    const { animeTitle, seriesImdbId, seriesImdbData, episodes } = options;
+    
+    // Create job
+    const job = createJob({ 
+        title: animeTitle, 
+        type: 'anime-batch',
+        totalEpisodes: episodes.length,
+        completedEpisodes: 0
+    });
+    scheduleJobCleanup(job.jobId, 2 * 60 * 60 * 1000); // 2 hours for anime series
+    
+    // Start async download
+    processAnimeSeriesDownload(job, options);
+    
+    return { jobId: job.jobId };
+}
+
+/**
+ * Process anime series download in background using ffmpeg for HLS
+ * @param {Object} job - Job object
+ * @param {Object} options - Download options
+ */
+async function processAnimeSeriesDownload(job, options) {
+    const { animeTitle, seriesImdbId, seriesImdbData, episodes } = options;
+    
+    job.status = 'downloading';
+    
+    const paths = config.getDownloadPaths();
+    const cleanAnimeTitle = sanitizeFilename(animeTitle);
+    const seriesSuffix = seriesImdbId ? ` [imdbid-${seriesImdbId}]` : '';
+    const seriesDir = path.join(paths.series, `${cleanAnimeTitle}${seriesSuffix}`);
+    
+    job.downloadDir = seriesDir;
+    
+    let completedEpisodes = 0;
+    
+    try {
+        for (let i = 0; i < episodes.length; i++) {
+            if (job.status === 'canceled') {
+                emitJobEvent(job, { type: 'canceled', jobId: job.jobId });
+                return;
+            }
+            
+            const ep = episodes[i];
+            const seasonStr = String(ep.season).padStart(2, '0');
+            const episodeStr = String(ep.episode).padStart(2, '0');
+            
+            // Emit episode start
+            emitJobEvent(job, {
+                type: 'episode-start',
+                jobId: job.jobId,
+                season: ep.season,
+                episode: ep.episode,
+                episodeTitle: ep.episodeTitle,
+                currentIndex: i + 1,
+                totalEpisodes: episodes.length
+            });
+            
+            // Get episode IMDB ID if available
+            let episodeImdbId = null;
+            if (omdb.isAvailable() && seriesImdbId) {
+                episodeImdbId = await omdb.getEpisodeImdbId(seriesImdbId, ep.season, ep.episode);
+                if (episodeImdbId) {
+                    logger.info(`Got IMDB ID for S${seasonStr}E${episodeStr}: ${episodeImdbId}`);
+                }
+            }
+            
+            // Create season directory
+            const seasonDir = path.join(seriesDir, `Season ${seasonStr}`);
+            if (!fs.existsSync(seasonDir)) {
+                fs.mkdirSync(seasonDir, { recursive: true });
+            }
+            
+            // Generate filename (anime uses .mp4 from HLS)
+            const episodeSuffix = episodeImdbId ? ` [imdbid-${episodeImdbId}]` : '';
+            const episodeFilename = `${cleanAnimeTitle} s${seasonStr}e${episodeStr}${episodeSuffix}.mp4`;
+            const episodePath = path.join(seasonDir, episodeFilename);
+            
+            logger.info(`Downloading anime episode: ${episodeFilename}`);
+            logger.info(`HLS URL: ${ep.videoUrl}`);
+            logger.info(`Referer: ${ep.referer || 'none'}`);
+            
+            // Download using ffmpeg for HLS
+            try {
+                await downloadHLSEpisode(ep.videoUrl, episodePath, ep.referer, job, i, episodes.length);
+                
+                completedEpisodes++;
+                job.completedEpisodes = completedEpisodes;
+                
+                logger.info(`Anime episode downloaded: ${episodeFilename}`);
+                
+                emitJobEvent(job, {
+                    type: 'episode-done',
+                    jobId: job.jobId,
+                    season: ep.season,
+                    episode: ep.episode,
+                    filename: episodeFilename,
+                    completedEpisodes,
+                    totalEpisodes: episodes.length
+                });
+            } catch (epError) {
+                logger.error(`Failed to download episode ${ep.episode}: ${epError.message}`);
+                // Continue with next episode instead of failing entire batch
+                emitJobEvent(job, {
+                    type: 'episode-error',
+                    jobId: job.jobId,
+                    season: ep.season,
+                    episode: ep.episode,
+                    error: epError.message
+                });
+            }
+        }
+        
+        // All done
+        job.status = 'done';
+        
+        emitJobEvent(job, {
+            type: 'done',
+            jobId: job.jobId,
+            animeTitle,
+            path: seriesDir,
+            totalEpisodes: episodes.length,
+            completedEpisodes
+        });
+        
+        logger.info(`Anime download complete: ${animeTitle} (${completedEpisodes}/${episodes.length} episodes)`);
+        
+    } catch (error) {
+        if (job.status === 'canceled') {
+            emitJobEvent(job, { type: 'canceled', jobId: job.jobId });
+            return;
+        }
+        
+        job.status = 'error';
+        logger.error(`Anime download failed: ${error.message}`);
+        
+        emitJobEvent(job, {
+            type: 'error',
+            jobId: job.jobId,
+            error: error.message || 'Anime download failed'
+        });
+    }
+}
+
+/**
+ * Download a single HLS episode using ffmpeg
+ * @param {string} hlsUrl - HLS stream URL
+ * @param {string} outputPath - Output file path
+ * @param {string} referer - Referer header
+ * @param {Object} job - Job object for progress reporting
+ * @param {number} episodeIndex - Current episode index
+ * @param {number} totalEpisodes - Total episodes count
+ * @returns {Promise<void>}
+ */
+async function downloadHLSEpisode(hlsUrl, outputPath, referer, job, episodeIndex, totalEpisodes) {
+    return new Promise((resolve, reject) => {
+        // Build ffmpeg arguments with proper headers
+        const ffmpegArgs = [
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ];
+        
+        // Add referer header if provided
+        if (referer) {
+            ffmpegArgs.push('-headers', `Referer: ${referer}\r\n`);
+        }
+        
+        ffmpegArgs.push(
+            '-i', hlsUrl,
+            '-c', 'copy',
+            '-bsf:a', 'aac_adtstoasc',
+            '-y',
+            outputPath
+        );
+        
+        const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
+        
+        let lastProgress = 0;
+        let duration = 0;
+        
+        ffmpeg.stderr.on('data', (data) => {
+            const output = data.toString();
+            
+            // Parse duration
+            const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2})/);
+            if (durationMatch) {
+                const [, hours, minutes, seconds] = durationMatch;
+                duration = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+            }
+            
+            // Parse progress
+            const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2})/);
+            if (timeMatch && duration > 0) {
+                const [, hours, minutes, seconds] = timeMatch;
+                const currentTime = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
+                const progress = Math.min(99, (currentTime / duration) * 100);
+                
+                if (progress > lastProgress + 2) {
+                    lastProgress = progress;
+                    emitJobEvent(job, {
+                        type: 'progress',
+                        jobId: job.jobId,
+                        progress,
+                        currentEpisode: episodeIndex + 1,
+                        totalEpisodes,
+                        message: `Episode ${episodeIndex + 1}/${totalEpisodes}: ${Math.round(progress)}%`
+                    });
+                }
+            }
+        });
+        
+        ffmpeg.on('close', (code) => {
+            if (code === 0) {
+                resolve();
+            } else {
+                reject(new Error(`ffmpeg exited with code ${code}`));
+            }
+        });
+        
+        ffmpeg.on('error', (err) => {
+            reject(err);
+        });
+    });
+}
+
 module.exports = {
     downloadFile,
     downloadSeries,
+    downloadHLS,
+    downloadAnimeSeries,
     generateFilename,
     getDownloadDir,
     removeEmptyDirsUp

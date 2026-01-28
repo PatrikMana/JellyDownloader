@@ -9,6 +9,7 @@ const downloadRoutes = require('./download');
 const imdbRoutes = require('./imdb');
 const tmdbRoutes = require('./tmdb');
 const settingsRoutes = require('./settings');
+const animeRoutes = require('./anime');
 
 module.exports = {
     searchRoutes,
@@ -16,5 +17,6 @@ module.exports = {
     downloadRoutes,
     imdbRoutes,
     tmdbRoutes,
-    settingsRoutes
+    settingsRoutes,
+    animeRoutes
 };

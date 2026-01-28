@@ -38,6 +38,22 @@ const ModeSelection = ({ currentMode, onModeChange }) => {
                             <i className="fas fa-arrow-right"></i>
                         </span>
                     </div>
+                    
+                    <div 
+                        className={`mode-card ${currentMode === 'anime' ? 'active' : ''}`}
+                        onClick={() => onModeChange('anime')}
+                    >
+                        <div className="mode-card-icon">
+                            <i className="fas fa-dragon"></i>
+                        </div>
+                        <h3 className="mode-card-title">Anime</h3>
+                        <p className="mode-card-desc">
+                            Stahuj anime v anglickém dabingu. Vyhledej anime a vyber epizody ke stažení.
+                        </p>
+                        <span className="mode-card-arrow">
+                            <i className="fas fa-arrow-right"></i>
+                        </span>
+                    </div>
                 </div>
             </div>
         </section>
