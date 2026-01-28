@@ -107,16 +107,11 @@ app.use('/api/*', (req, res) => {
 
 // Startup
 const startServer = () => {
-    // Ensure downloads directories exist
-    const moviesDir = path.join(config.downloadsDir, 'movies');
-    const seriesDir = path.join(config.downloadsDir, 'tvshows');
-    
-    [config.downloadsDir, moviesDir, seriesDir].forEach(dir => {
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-            logger.info(`Created directory: ${dir}`);
-        }
-    });
+    // Only ensure main downloads directory exists (subdirectories created on demand)
+    if (!fs.existsSync(config.downloadsDir)) {
+        fs.mkdirSync(config.downloadsDir, { recursive: true });
+        logger.info(`Created directory: ${config.downloadsDir}`);
+    }
     
     app.listen(config.port, () => {
         logger.info('='.repeat(50));
