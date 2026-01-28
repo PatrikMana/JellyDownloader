@@ -35,6 +35,7 @@ router.get('/', (req, res) => {
             success: true,
             moviesDir: env.MOVIES_DIR || env.JELLYFIN_DIR || path.join(config.downloadsDir, 'movies'),
             seriesDir: env.SERIES_DIR || env.JELLYFIN_DIR || path.join(config.downloadsDir, 'tvshows'),
+            animeDir: env.ANIME_DIR || env.SERIES_DIR || env.JELLYFIN_DIR || path.join(config.downloadsDir, 'anime'),
             jellyfinDir: env.JELLYFIN_DIR || '',
             omdbApiKey: env.OMDB_API_KEY ? '****' + env.OMDB_API_KEY.slice(-4) : '',
             tmdbApiKey: env.TMDB_API_KEY ? '****' + env.TMDB_API_KEY.slice(-4) : '',
@@ -59,7 +60,7 @@ router.post('/', (req, res) => {
     try {
         logger.request('POST', '/api/settings');
         
-        const { moviesDir, seriesDir, jellyfinDir, omdbApiKey, tmdbApiKey } = req.body;
+        const { moviesDir, seriesDir, animeDir, jellyfinDir, omdbApiKey, tmdbApiKey } = req.body;
         
         // Read current .env
         let envContent = '';
@@ -83,6 +84,7 @@ router.post('/', (req, res) => {
         
         if (moviesDir) envContent = updateEnvValue(envContent, 'MOVIES_DIR', moviesDir);
         if (seriesDir) envContent = updateEnvValue(envContent, 'SERIES_DIR', seriesDir);
+        if (animeDir) envContent = updateEnvValue(envContent, 'ANIME_DIR', animeDir);
         if (jellyfinDir !== undefined) envContent = updateEnvValue(envContent, 'JELLYFIN_DIR', jellyfinDir);
         if (omdbApiKey && !omdbApiKey.startsWith('****')) {
             envContent = updateEnvValue(envContent, 'OMDB_API_KEY', omdbApiKey);

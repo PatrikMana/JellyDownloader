@@ -5,7 +5,8 @@ import { useToast } from '../context/ToastContext';
 const SettingsModal = ({ isOpen, onClose }) => {
     const [settings, setSettings] = useState({
         moviesDir: '',
-        seriesDir: ''
+        seriesDir: '',
+        animeDir: ''
     });
     const [loading, setLoading] = useState(false);
     const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
@@ -26,7 +27,8 @@ const SettingsModal = ({ isOpen, onClose }) => {
             const data = await settingsApi.get();
             setSettings({
                 moviesDir: data.moviesDir || '',
-                seriesDir: data.seriesDir || ''
+                seriesDir: data.seriesDir || '',
+                animeDir: data.animeDir || ''
             });
         } catch (error) {
             console.error('Failed to load settings:', error);
@@ -165,6 +167,27 @@ const SettingsModal = ({ isOpen, onClose }) => {
                                     <button 
                                         className="settings-browse-btn"
                                         onClick={() => openFileBrowser('seriesDir')}
+                                    >
+                                        <i className="fas fa-folder-open"></i>
+                                        Procházet
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="settings-item">
+                                <label className="settings-label">Složka pro anime</label>
+                                <p className="settings-hint">Kam se budou ukládat stažená anime</p>
+                                <div className="settings-input-group">
+                                    <input 
+                                        type="text" 
+                                        className="settings-input"
+                                        value={settings.animeDir}
+                                        onChange={e => setSettings(prev => ({ ...prev, animeDir: e.target.value }))}
+                                        placeholder={settings.animeDir || 'Klikněte na Procházet pro výběr složky'}
+                                    />
+                                    <button 
+                                        className="settings-browse-btn"
+                                        onClick={() => openFileBrowser('animeDir')}
                                     >
                                         <i className="fas fa-folder-open"></i>
                                         Procházet

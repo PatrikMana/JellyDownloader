@@ -12,6 +12,7 @@ const AnimeMode = ({ isActive }) => {
     const [selectedEpisodes, setSelectedEpisodes] = useState([]);
     const [downloading, setDownloading] = useState(false);
     const [apiStatus, setApiStatus] = useState(null);
+    const [expandedSeason, setExpandedSeason] = useState(true); // Default expanded
     
     const { showError, showInfo, showWarning, showSuccess } = useToast();
     const { addDownload } = useDownload();
@@ -306,6 +307,9 @@ const AnimeMode = ({ isActive }) => {
                                         )}
                                     </p>
                                 )}
+                                <p className="imdb-id" style={{ marginTop: '5px' }}>
+                                    {episodes.length} epizod
+                                </p>
                                 <button 
                                     className="btn btn-secondary btn-sm"
                                     onClick={() => {
@@ -348,30 +352,41 @@ const AnimeMode = ({ isActive }) => {
                                     )}
                                 </div>
 
-                                {/* Episode Grid - Season 1 */}
-                                <div className="season-block">
-                                    <div className="season-header">
-                                        <span className="season-title">
-                                            <i className="fas fa-layer-group"></i> Sezóna 1
-                                        </span>
-                                        <span className="episode-count">{episodes.length} epizod</span>
-                                    </div>
-                                    <div className="episode-grid">
-                                        {episodes.map((ep) => (
+                                {/* Season Tree - Same style as Series */}
+                                <div className="season-tree">
+                                    <div className="season-item">
+                                        <div className="season-header" onClick={() => setExpandedSeason(!expandedSeason)}>
                                             <div 
-                                                key={ep.episodeNo}
-                                                className={`episode-card ${selectedEpisodes.includes(ep.episodeNo) ? 'selected' : ''}`}
-                                                onClick={() => toggleEpisodeSelection(ep.episodeNo)}
+                                                className={`season-checkbox ${selectedEpisodes.length === episodes.length ? 'checked' : ''} ${selectedEpisodes.length > 0 && selectedEpisodes.length < episodes.length ? 'partial' : ''}`}
+                                                onClick={(e) => { 
+                                                    e.stopPropagation(); 
+                                                    selectedEpisodes.length === episodes.length ? deselectAllEpisodes() : selectAllEpisodes();
+                                                }}
                                             >
-                                                <div className="episode-number">E{ep.episodeNo}</div>
-                                                <div className="episode-title" title={ep.title}>
-                                                    {ep.title || `Epizoda ${ep.episodeNo}`}
-                                                </div>
-                                                {selectedEpisodes.includes(ep.episodeNo) && (
-                                                    <i className="fas fa-check episode-check"></i>
-                                                )}
+                                                <i className={`fas ${selectedEpisodes.length > 0 && selectedEpisodes.length < episodes.length ? 'fa-minus' : 'fa-check'}`}></i>
                                             </div>
-                                        ))}
+                                            <div className={`season-toggle ${expandedSeason ? 'expanded' : ''}`}>
+                                                <i className="fas fa-chevron-right"></i>
+                                            </div>
+                                            <span className="season-name">Sezóna 1</span>
+                                            <span className="season-count">{episodes.length} epizod</span>
+                                        </div>
+                                        
+                                        <div className={`episodes-list ${expandedSeason ? 'expanded' : ''}`}>
+                                            {episodes.map((ep) => (
+                                                <div 
+                                                    key={ep.episodeNo}
+                                                    className={`episode-item ${selectedEpisodes.includes(ep.episodeNo) ? 'selected' : ''}`}
+                                                    onClick={() => toggleEpisodeSelection(ep.episodeNo)}
+                                                >
+                                                    <div className={`episode-checkbox ${selectedEpisodes.includes(ep.episodeNo) ? 'checked' : ''}`}>
+                                                        <i className="fas fa-check"></i>
+                                                    </div>
+                                                    <span className="episode-number">E{ep.episodeNo}</span>
+                                                    <span className="episode-name">{ep.title || `Epizoda ${ep.episodeNo}`}</span>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
 

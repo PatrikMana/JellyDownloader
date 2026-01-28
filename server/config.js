@@ -49,7 +49,8 @@ const config = {
         
         return {
             movies: env.MOVIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'movies'),
-            series: env.SERIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'tvshows')
+            series: env.SERIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'tvshows'),
+            anime: env.ANIME_DIR || env.SERIES_DIR || env.JELLYFIN_DIR || path.join(DOWNLOADS_DIR, 'anime')
         };
     },
     

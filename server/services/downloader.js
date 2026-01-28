@@ -656,9 +656,9 @@ async function processAnimeSeriesDownload(job, options) {
     const paths = config.getDownloadPaths();
     const cleanAnimeTitle = sanitizeFilename(animeTitle);
     const seriesSuffix = seriesImdbId ? ` [imdbid-${seriesImdbId}]` : '';
-    const seriesDir = path.join(paths.series, `${cleanAnimeTitle}${seriesSuffix}`);
+    const animeDir = path.join(paths.anime, `${cleanAnimeTitle}${seriesSuffix}`);
     
-    job.downloadDir = seriesDir;
+    job.downloadDir = animeDir;
     
     let completedEpisodes = 0;
     
@@ -694,7 +694,7 @@ async function processAnimeSeriesDownload(job, options) {
             }
             
             // Create season directory
-            const seasonDir = path.join(seriesDir, `Season ${seasonStr}`);
+            const seasonDir = path.join(animeDir, `Season ${seasonStr}`);
             if (!fs.existsSync(seasonDir)) {
                 fs.mkdirSync(seasonDir, { recursive: true });
             }
@@ -746,7 +746,7 @@ async function processAnimeSeriesDownload(job, options) {
             type: 'done',
             jobId: job.jobId,
             animeTitle,
-            path: seriesDir,
+            path: animeDir,
             totalEpisodes: episodes.length,
             completedEpisodes
         });
