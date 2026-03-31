@@ -2,6 +2,8 @@
 
 Webová aplikace pro vyhledávání a stahování filmů ze serveru prehrajto.cz **s automatickým pojmenováním pro Jellyfin**
 
+> **📦 Docker & CasaOS:** Viz [QUICK_SETUP.md](./QUICK_SETUP.md) pro instalaci přes Docker/CasaOS
+
 ## Funkce
 
 -   **Vyhledávání filmů a seriálů** - jednoduché zadání názvu

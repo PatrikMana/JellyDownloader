@@ -3,7 +3,7 @@ version: "3.8"
 services:
   jellydownloader:
     build: .
-    image: ghcr.io/PatrikMana/jellydownloader:latest
+    image: ghcr.io/patrikmana/jellydownloader:latest
     container_name: jellydownloader
     restart: unless-stopped
     ports:

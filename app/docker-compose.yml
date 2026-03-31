@@ -1,7 +1,7 @@
 name: jellydownloader
 services:
   jellydownloader:
-    image: ghcr.io/PatrikMana/jellydownloader:latest
+    image: ghcr.io/patrikmana/jellydownloader:latest
     container_name: jellydownloader
     restart: unless-stopped
     network_mode: bridge
@@ -74,7 +74,7 @@ x-casaos:
       - Automatické pojmenování pro Jellyfin
       - Integrace s IMDB/TMDB metadaty
   developer: JPMP Production
-  icon: https://raw.githubusercontent.com/PatrikMana/jellydownloader/main/app/icon.png
+  icon: https://raw.githubusercontent.com/PatrikMana/JellyDownloader/main/app/icon.png
   index: /
   main: jellydownloader
   port_map: "6565"
@@ -83,7 +83,7 @@ x-casaos:
   tagline:
     en_us: Download movies and series from prehrajto.cz
     cs_cz: Stahuj filmy a seriály z prehrajto.cz
-  thumbnail: https://raw.githubusercontent.com/PatrikMana/jellydownloader/main/app/icon.png
+  thumbnail: https://raw.githubusercontent.com/PatrikMana/JellyDownloader/main/app/icon.png
   title:
     en_us: JellyDownloader
     cs_cz: JellyDownloader
