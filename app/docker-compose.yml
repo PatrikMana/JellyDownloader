@@ -11,8 +11,11 @@ services:
         protocol: tcp
     environment:
       - PORT=6565
+      - DOCKER_CONTAINER=true
       - OMDB_API_KEY=
       - TMDB_API_KEY=
+      - DOWNLOADS_DIR=/downloads
+      - CONFIG_DIR=/config
       - MOVIES_DIR=/downloads/movies
       - SERIES_DIR=/downloads/tvshows
       - ANIME_DIR=/downloads/anime
@@ -74,7 +77,7 @@ x-casaos:
       - Automatické pojmenování pro Jellyfin
       - Integrace s IMDB/TMDB metadaty
   developer: JPMP Production
-  icon: https://raw.githubusercontent.com/PatrikMana/JellyDownloader/main/app/icon.png
+  icon: https://raw.githubusercontent.com/patrikmana/JellyDownloader/main/app/icon.png
   index: /
   main: jellydownloader
   port_map: "6565"
@@ -83,7 +86,7 @@ x-casaos:
   tagline:
     en_us: Download movies and series from prehrajto.cz
     cs_cz: Stahuj filmy a seriály z prehrajto.cz
-  thumbnail: https://raw.githubusercontent.com/PatrikMana/JellyDownloader/main/app/icon.png
+  thumbnail: https://raw.githubusercontent.com/patrikmana/JellyDownloader/main/app/icon.png
   title:
     en_us: JellyDownloader
     cs_cz: JellyDownloader

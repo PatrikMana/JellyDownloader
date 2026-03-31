@@ -59,9 +59,89 @@ app.get('/api/imdb-by-id/:imdbId', (req, res, next) => {
     imdbRoutes(req, res, next);
 });
 
-app.get('/api/browse-directory', (req, res, next) => {
-    req.url = '/browse-directory';
-    settingsRoutes(req, res, next);
+// Browse directory - direct handler for Docker compatibility
+app.get('/api/browse-directory', (req, res) => {
+    const fs = require('fs');
+    const path = require('path');
+    const config = require('./config');
+    
+    try {
+        const requestedPath = req.query.path || '';
+        const isDocker = config.isDocker;
+        const dockerRoots = ['/downloads', '/config'];
+        
+        let browsePath;
+        if (requestedPath && requestedPath !== '') {
+            browsePath = path.resolve(requestedPath);
+        } else if (isDocker) {
+            browsePath = '/downloads';
+        } else {
+            browsePath = process.env.HOME || process.env.USERPROFILE || '/';
+        }
+        
+        // Special case: "/" in Docker - show available roots
+        if (isDocker && (browsePath === '/' || requestedPath === '/')) {
+            const availableRoots = dockerRoots
+                .filter(rootPath => fs.existsSync(rootPath))
+                .map(rootPath => ({
+                    name: rootPath.substring(1),
+                    path: rootPath,
+                    isDirectory: true
+                }));
+            
+            return res.json({
+                success: true,
+                currentPath: '/',
+                parentPath: '/',
+                isRoot: true,
+                isDocker: true,
+                items: availableRoots
+            });
+        }
+        
+        if (!fs.existsSync(browsePath)) {
+            if (isDocker && fs.existsSync('/downloads')) {
+                browsePath = '/downloads';
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Path does not exist'
+                });
+            }
+        }
+        
+        const entries = fs.readdirSync(browsePath, { withFileTypes: true });
+        
+        const items = entries
+            .filter(entry => entry.isDirectory())
+            .filter(entry => !entry.name.startsWith('.'))
+            .map(entry => ({
+                name: entry.name,
+                path: path.join(browsePath, entry.name),
+                isDirectory: true
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        
+        let parentPath = path.dirname(browsePath);
+        if (isDocker && dockerRoots.includes(browsePath)) {
+            parentPath = '/';
+        }
+        
+        res.json({
+            success: true,
+            currentPath: browsePath,
+            parentPath: parentPath,
+            isDocker: isDocker,
+            items
+        });
+        
+    } catch (error) {
+        logger.error('Browse directory failed', { error: error.message });
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
 // Static files - React frontend

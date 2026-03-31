@@ -10,8 +10,11 @@ services:
       - "6565:6565"
     environment:
       - PORT=6565
+      - DOCKER_CONTAINER=true
       - OMDB_API_KEY=${OMDB_API_KEY:-}
       - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - DOWNLOADS_DIR=/downloads
+      - CONFIG_DIR=/config
       - MOVIES_DIR=/downloads/movies
       - SERIES_DIR=/downloads/tvshows
       - ANIME_DIR=/downloads/anime

@@ -12,15 +12,29 @@ const CONFIG_DIR = process.env.CONFIG_DIR || path.join(ROOT_DIR, 'config');
 const ENV_PATH = path.join(CONFIG_DIR, '.env');
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || path.join(ROOT_DIR, 'downloads');
 
+// Detect Docker environment
+const IS_DOCKER = fs.existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+
 // Ensure config directory exists
 if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
 }
 
-// Ensure downloads directory exists
+// Ensure downloads directory and subdirectories exist
 if (!fs.existsSync(DOWNLOADS_DIR)) {
     fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
 }
+
+// Create subdirectories for movies, tvshows, anime
+const MOVIES_DIR = process.env.MOVIES_DIR || path.join(DOWNLOADS_DIR, 'movies');
+const SERIES_DIR = process.env.SERIES_DIR || path.join(DOWNLOADS_DIR, 'tvshows');
+const ANIME_DIR = process.env.ANIME_DIR || path.join(DOWNLOADS_DIR, 'anime');
+
+[MOVIES_DIR, SERIES_DIR, ANIME_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+});
 
 const config = {
     // Server
@@ -36,6 +50,9 @@ const config = {
     downloadsDir: DOWNLOADS_DIR,
     publicDir: path.join(ROOT_DIR, 'public-react'),
     envPath: ENV_PATH,
+    
+    // Docker detection
+    isDocker: IS_DOCKER,
     
     // Feature flags
     hasOmdbKey: () => config.omdbApiKey && config.omdbApiKey !== 'your-api-key-here',

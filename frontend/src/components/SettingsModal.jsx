@@ -12,8 +12,10 @@ const SettingsModal = ({ isOpen, onClose }) => {
     const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
     const [fileBrowserTarget, setFileBrowserTarget] = useState(null);
     const [currentPath, setCurrentPath] = useState('');
+    const [parentPath, setParentPath] = useState('');
     const [items, setItems] = useState([]);
     const [browseLoading, setBrowseLoading] = useState(false);
+    const [isDocker, setIsDocker] = useState(false);
     const { showSuccess, showError } = useToast();
 
     useEffect(() => {
@@ -60,7 +62,9 @@ const SettingsModal = ({ isOpen, onClose }) => {
         try {
             const data = await fileBrowserApi.browse(path);
             setCurrentPath(data.currentPath || path);
+            setParentPath(data.parentPath || '');
             setItems(data.items || []);
+            setIsDocker(data.isDocker || false);
         } catch (error) {
             showError('Chyba', 'Nepodařilo se načíst složku');
             setItems([]);
@@ -70,29 +74,9 @@ const SettingsModal = ({ isOpen, onClose }) => {
     };
 
     const navigateUp = () => {
-        // Use parentPath from API response if available
-        if (currentPath) {
-            // For Windows paths like C:\Users\Patrik, go to parent
-            const isWindows = currentPath.includes('\\') || /^[A-Z]:/.test(currentPath);
-            
-            if (isWindows) {
-                const parts = currentPath.split('\\').filter(Boolean);
-                if (parts.length > 1) {
-                    parts.pop();
-                    const newPath = parts.join('\\');
-                    browsePath(newPath);
-                }
-            } else {
-                // Unix paths
-                const parts = currentPath.split('/').filter(Boolean);
-                if (parts.length > 1) {
-                    parts.pop();
-                    const newPath = '/' + parts.join('/');
-                    browsePath(newPath);
-                } else if (parts.length === 1) {
-                    browsePath('/');
-                }
-            }
+        // Use parentPath from API response
+        if (parentPath && parentPath !== currentPath) {
+            browsePath(parentPath);
         }
     };
 

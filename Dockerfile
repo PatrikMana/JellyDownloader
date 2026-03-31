@@ -37,12 +37,25 @@ COPY server/ ./server/
 # Copy built frontend from builder stage
 COPY --from=frontend-builder /app/public-react ./public-react/
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 # Create directories for data persistence
-RUN mkdir -p /app/downloads /app/logs /config
+RUN mkdir -p /downloads/movies /downloads/tvshows /downloads/anime /config /app/logs
+
+# Create symlink for backward compatibility
+RUN ln -sf /downloads /app/downloads
 
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=6565
+ENV DOCKER_CONTAINER=true
+ENV DOWNLOADS_DIR=/downloads
+ENV CONFIG_DIR=/config
+ENV MOVIES_DIR=/downloads/movies
+ENV SERIES_DIR=/downloads/tvshows
+ENV ANIME_DIR=/downloads/anime
 
 # Expose port
 EXPOSE 6565
@@ -51,5 +64,5 @@ EXPOSE 6565
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:6565/ || exit 1
 
-# Start the application
-CMD ["node", "server/index.js"]
+# Use entrypoint script to create directories after volume mount
+ENTRYPOINT ["/docker-entrypoint.sh"]

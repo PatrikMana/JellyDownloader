@@ -121,21 +121,62 @@ router.get('/browse-directory', (req, res) => {
         const requestedPath = req.query.path || '';
         logger.request('GET', `/api/browse-directory?path=${requestedPath}`);
         
+        // Use Docker detection from config
+        const isDocker = config.isDocker;
+        logger.info(`Browse directory - isDocker: ${isDocker}, requestedPath: "${requestedPath}"`);
+        
+        // Define allowed root paths in Docker
+        const dockerRoots = ['/downloads', '/config'];
+        
         // Determine base path
         let browsePath;
-        if (requestedPath) {
+        if (requestedPath && requestedPath !== '') {
             browsePath = path.resolve(requestedPath);
+        } else if (isDocker) {
+            // In Docker, default to /downloads
+            browsePath = '/downloads';
         } else {
             // Default to home directory or root
             browsePath = process.env.HOME || process.env.USERPROFILE || '/';
         }
         
+        logger.info(`Browse directory - resolved path: "${browsePath}"`);
+        
+        // Special case: if path is "/" in Docker, show available root directories
+        if (isDocker && (browsePath === '/' || requestedPath === '/')) {
+            const availableRoots = dockerRoots
+                .filter(rootPath => fs.existsSync(rootPath))
+                .map(rootPath => ({
+                    name: rootPath.substring(1), // remove leading /
+                    path: rootPath,
+                    isDirectory: true
+                }));
+            
+            logger.info(`Docker root listing - found ${availableRoots.length} roots`);
+            
+            return res.json({
+                success: true,
+                currentPath: '/',
+                parentPath: '/',
+                isRoot: true,
+                isDocker: true,
+                items: availableRoots
+            });
+        }
+        
         // Check if path exists
         if (!fs.existsSync(browsePath)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Path does not exist'
-            });
+            logger.warn(`Path does not exist: "${browsePath}"`);
+            // If path doesn't exist in Docker, try to default to /downloads
+            if (isDocker && fs.existsSync('/downloads')) {
+                browsePath = '/downloads';
+                logger.info(`Falling back to /downloads`);
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Path does not exist'
+                });
+            }
         }
         
         // Read directory
@@ -151,15 +192,24 @@ router.get('/browse-directory', (req, res) => {
             }))
             .sort((a, b) => a.name.localeCompare(b.name));
         
+        // In Docker, if we're at a root level, parent should be /
+        let parentPath = path.dirname(browsePath);
+        if (isDocker && dockerRoots.includes(browsePath)) {
+            parentPath = '/';
+        }
+        
+        logger.info(`Browse directory success - ${items.length} items found in "${browsePath}"`);
+        
         res.json({
             success: true,
             currentPath: browsePath,
-            parentPath: path.dirname(browsePath),
+            parentPath: parentPath,
+            isDocker: isDocker,
             items
         });
         
     } catch (error) {
-        logger.error('Browse directory failed', { error: error.message });
+        logger.error('Browse directory failed', { error: error.message, stack: error.stack });
         res.status(500).json({
             success: false,
             error: error.message
