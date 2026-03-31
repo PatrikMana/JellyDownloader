@@ -1,5 +1,5 @@
 {
-  "name": "prehrajto-downloader",
+  "name": "jellydownloader",
   "version": "2.1.0",
   "description": "Web aplikace pro vyhledavani a stahovani filmu z prehrajto.cz",
   "main": "server/index.js",

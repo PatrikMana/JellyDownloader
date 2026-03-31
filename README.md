@@ -1,4 +1,4 @@
-# Prehrajto Stahování
+# JellyDownloader
 
 Webová aplikace pro vyhledávání a stahování filmů ze serveru prehrajto.cz **s automatickým pojmenováním pro Jellyfin**
 
@@ -60,7 +60,7 @@ http://localhost:3000
 ## Struktura projektu
 
 ```
-prehrajto-downloader/ server.js           # Node.js server package.json        # Dependencies public/    index.html      # Hlavní stránka    app.js          # Frontend JavaScript    style.css       # Custom CSS README.md           # Dokumentace
+jellydownloader/ server.js           # Node.js server package.json        # Dependencies public/    index.html      # Hlavní stránka    app.js          # Frontend JavaScript    style.css       # Custom CSS README.md           # Dokumentace
 ```
 
 ## API Endpointy

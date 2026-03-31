@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  jellydownloader:
+    build: .
+    image: ghcr.io/PatrikMana/jellydownloader:latest
+    container_name: jellydownloader
+    restart: unless-stopped
+    ports:
+      - "6565:6565"
+    environment:
+      - PORT=6565
+      - OMDB_API_KEY=${OMDB_API_KEY:-}
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - MOVIES_DIR=/downloads/movies
+      - SERIES_DIR=/downloads/tvshows
+      - ANIME_DIR=/downloads/anime
+    volumes:
+      # Config persistence
+      - ./config:/config
+      # Media downloads - map to your Jellyfin/media library
+      - ./downloads:/downloads
+      # Alternatively, map directly to Jellyfin directories:
+      # - /DATA/Media/Movies:/downloads/movies
+      # - /DATA/Media/TVShows:/downloads/tvshows
+      # - /DATA/Media/Anime:/downloads/anime
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6565/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

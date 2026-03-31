@@ -8,8 +8,14 @@ const path = require('path');
 const fs = require('fs');
 
 const ROOT_DIR = path.join(__dirname, '..');
-const ENV_PATH = path.join(ROOT_DIR, '.env');
-const DOWNLOADS_DIR = path.join(ROOT_DIR, 'downloads');
+const CONFIG_DIR = process.env.CONFIG_DIR || path.join(ROOT_DIR, 'config');
+const ENV_PATH = path.join(CONFIG_DIR, '.env');
+const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || path.join(ROOT_DIR, 'downloads');
+
+// Ensure config directory exists
+if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+}
 
 // Ensure downloads directory exists
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -26,6 +32,7 @@ const config = {
     
     // Directories
     rootDir: ROOT_DIR,
+    configDir: CONFIG_DIR,
     downloadsDir: DOWNLOADS_DIR,
     publicDir: path.join(ROOT_DIR, 'public-react'),
     envPath: ENV_PATH,
