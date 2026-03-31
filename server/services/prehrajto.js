@@ -57,6 +57,62 @@ async function search(searchTerm) {
 }
 
 /**
+ * Process sources array and extract qualities
+ * @param {Array} sourcesArray - Array of video sources
+ * @returns {Array} Array of quality objects
+ */
+function processSourcesArray(sourcesArray) {
+    const foundQualities = [];
+    
+    sourcesArray.forEach((item, index) => {
+        if (item.file || item.src) {
+            const src = item.file || item.src;
+            
+            let res = 0;
+            let label = `Video ${index + 1}`;
+            
+            // Try to get resolution from object properties
+            if (item.res) {
+                res = parseInt(item.res);
+                label = `${res}p`;
+            } else if (item.quality) {
+                // Sometimes quality is used instead of res
+                if (item.quality.includes('1080')) res = 1080;
+                else if (item.quality.includes('720')) res = 720;
+                else if (item.quality.includes('480')) res = 480;
+                label = item.quality;
+            } else {
+                // Heuristics - detect from URL or index
+                const urlQualityMatch = src.match(/(\d{3,4})p/i);
+                if (urlQualityMatch) {
+                    res = parseInt(urlQualityMatch[1]);
+                    label = `${res}p`;
+                } else if (src.includes('1080') || src.includes('fullhd') || src.includes('fhd')) {
+                    res = 1080;
+                    label = '1080p';
+                } else if (src.includes('720') || src.includes('hd')) {
+                    res = 720;
+                    label = '720p';
+                } else {
+                    // Fallback by index (first = lower quality, later = higher)
+                    if (index === 0) {
+                        res = 720;
+                        label = '720p';
+                    } else {
+                        res = 1080;
+                        label = '1080p';
+                    }
+                }
+            }
+            
+            foundQualities.push({ src, res, label, index });
+        }
+    });
+    
+    return foundQualities;
+}
+
+/**
  * Get video page and extract video URLs
  * @param {string} videoPath - Video path (e.g., "video/xxxxx")
  * @returns {Promise<Object>} Video data with qualities
@@ -73,83 +129,81 @@ async function getVideoDetails(videoPath) {
     const html = response.data;
     let qualities = [];
     let videoUrl = null;
+    let subtitles = [];
     
-    // Method 1: Parse var sources = [...] array (primary method for prehrajto.cz)
-    const sourcesMatch = html.match(/var\s+sources\s*=\s*(\[[\s\S]*?\]);/);
+    // Method 1: Parse var videos = [...] and var tracks = [...] (primary method for prehrajto.cz)
+    // The page typically has: var videos = [...]; var tracks = [...]; var sources = {videos: videos, tracks: tracks};
     
-    if (sourcesMatch) {
+    // Extract videos array
+    const videosMatch = html.match(/var\s+videos\s*=\s*(\[[\s\S]*?\]);/);
+    // Extract tracks array
+    const tracksMatch = html.match(/var\s+tracks\s*=\s*(\[[\s\S]*?\]);/);
+    
+    if (videosMatch) {
         try {
-            const sourcesArrayText = sourcesMatch[1];
-            logger.debug('Found sources array');
+            logger.debug('Found videos array');
+            const videosArray = new Function('return ' + videosMatch[1])();
             
-            // Parse sources array
-            const sourcesArray = new Function('return ' + sourcesArrayText)();
-            
-            if (Array.isArray(sourcesArray) && sourcesArray.length > 0) {
-                logger.debug(`Sources array has ${sourcesArray.length} items`);
-                
-                const foundQualities = [];
-                
-                sourcesArray.forEach((item, index) => {
-                    if (item.file || item.src) {
-                        const src = item.file || item.src;
-                        
-                        let res = 0;
-                        let label = `Video ${index + 1}`;
-                        
-                        // Try to get resolution from object properties
-                        if (item.res) {
-                            res = parseInt(item.res);
-                            label = `${res}p`;
-                        } else if (item.quality) {
-                            // Sometimes quality is used instead of res
-                            if (item.quality.includes('1080')) res = 1080;
-                            else if (item.quality.includes('720')) res = 720;
-                            else if (item.quality.includes('480')) res = 480;
-                            label = item.quality;
-                        } else {
-                            // Heuristics - detect from URL or index
-                            const urlQualityMatch = src.match(/(\d{3,4})p/i);
-                            if (urlQualityMatch) {
-                                res = parseInt(urlQualityMatch[1]);
-                                label = `${res}p`;
-                            } else if (src.includes('1080') || src.includes('fullhd') || src.includes('fhd')) {
-                                res = 1080;
-                                label = '1080p';
-                            } else if (src.includes('720') || src.includes('hd')) {
-                                res = 720;
-                                label = '720p';
-                            } else {
-                                // Fallback by index (first = lower quality, later = higher)
-                                if (index === 0) {
-                                    res = 720;
-                                    label = '720p';
-                                } else {
-                                    res = 1080;
-                                    label = '1080p';
-                                }
-                            }
-                        }
-                        
-                        foundQualities.push({ src, res, label, index });
-                    }
-                });
-                
-                // Sort by resolution (highest first) and filter valid URLs
-                qualities = foundQualities
-                    .filter(q => q.src && q.src.startsWith('http'))
-                    .sort((a, b) => b.res - a.res);
-                
+            if (Array.isArray(videosArray) && videosArray.length > 0) {
+                logger.info(`Found ${videosArray.length} video sources`);
+                const foundQualities = processSourcesArray(videosArray);
+                qualities = foundQualities.filter(q => q.src && q.src.startsWith('http')).sort((a, b) => b.res - a.res);
                 if (qualities.length > 0) {
                     videoUrl = qualities[0].src;
                 }
             }
         } catch (parseError) {
-            logger.warn('Failed to parse sources array', { error: parseError.message });
+            logger.warn('Failed to parse videos array', { error: parseError.message });
         }
     }
     
-    // Method 2: Try Playerjs config if sources array not found
+    if (tracksMatch) {
+        try {
+            logger.debug('Found tracks array');
+            const tracksArray = new Function('return ' + tracksMatch[1])();
+            
+            if (Array.isArray(tracksArray) && tracksArray.length > 0) {
+                logger.info(`Found ${tracksArray.length} subtitle tracks`);
+                // Debug: log first track structure
+                logger.info('Track structure: ' + JSON.stringify(tracksArray[0]));
+                
+                subtitles = tracksArray
+                    .filter(track => track.src || track.file)
+                    .map(track => ({
+                        src: track.src || track.file,
+                        label: track.label || track.kind || 'Titulky',
+                        language: track.srclang || track.language || 'cs'
+                    }));
+                logger.info(`Extracted ${subtitles.length} subtitles`);
+            }
+        } catch (parseError) {
+            logger.warn('Failed to parse tracks array', { error: parseError.message });
+        }
+    }
+    
+    // Method 2: Try old format - var sources = [...] (direct array)
+    if (!videoUrl) {
+        const sourcesMatch = html.match(/var\s+sources\s*=\s*(\[[\s\S]*?\]);/);
+        
+        if (sourcesMatch) {
+            try {
+                logger.debug('Found sources array (old format)');
+                const sourcesArray = new Function('return ' + sourcesMatch[1])();
+                
+                if (Array.isArray(sourcesArray) && sourcesArray.length > 0) {
+                    const foundQualities = processSourcesArray(sourcesArray);
+                    qualities = foundQualities.filter(q => q.src && q.src.startsWith('http')).sort((a, b) => b.res - a.res);
+                    if (qualities.length > 0) {
+                        videoUrl = qualities[0].src;
+                    }
+                }
+            } catch (parseError) {
+                logger.warn('Failed to parse sources array', { error: parseError.message });
+            }
+        }
+    }
+    
+    // Method 3: Try Playerjs config if sources array not found
     if (!videoUrl) {
         const playerjsMatch = html.match(/new\s+Playerjs\s*\(\s*(\{[\s\S]*?\})\s*\)/);
         
@@ -233,6 +287,7 @@ async function getVideoDetails(videoPath) {
     return {
         videoUrl,
         qualities,
+        subtitles,
         sourceUrl: url
     };
 }

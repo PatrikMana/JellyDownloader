@@ -103,6 +103,38 @@ function removeEmptyDirsUp(startDir, stopAtDir) {
 }
 
 /**
+ * Download subtitle file
+ * @param {string} url - Subtitle URL
+ * @param {string} destPath - Destination path
+ * @returns {Promise<boolean>} Success status
+ */
+async function downloadSubtitle(url, destPath) {
+    try {
+        logger.info(`Downloading subtitle: ${path.basename(destPath)}`);
+        
+        const response = await axios({
+            method: 'GET',
+            url: url,
+            responseType: 'stream',
+            timeout: 30000,
+            headers: {
+                'User-Agent': config.axios.userAgent,
+                'Referer': 'https://prehrajto.cz/',
+            }
+        });
+        
+        const writeStream = fs.createWriteStream(destPath);
+        await pipelineAsync(response.data, writeStream);
+        
+        logger.info(`Subtitle downloaded: ${path.basename(destPath)}`);
+        return true;
+    } catch (error) {
+        logger.warn(`Failed to download subtitle: ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * Download a single file with progress
  * @param {Object} options - Download options
  * @returns {Promise<Object>} Download result
@@ -126,7 +158,7 @@ async function downloadFile(options) {
  * @param {Object} options - Download options
  */
 async function processDownload(job, options) {
-    const { videoUrl, title, imdbData, type = 'movie', season = null, episode = null } = options;
+    const { videoUrl, title, imdbData, type = 'movie', season = null, episode = null, subtitles = [] } = options;
     let videoPath = null;
     
     try {
@@ -224,6 +256,17 @@ async function processDownload(job, options) {
         });
         
         await pipelineAsync(response.data, writeStream);
+        
+        // Download subtitles if provided
+        if (subtitles && Array.isArray(subtitles) && subtitles.length > 0) {
+            logger.info(`Downloading ${subtitles.length} subtitle(s)`);
+            for (const sub of subtitles) {
+                const subExt = sub.src.toLowerCase().endsWith('.vtt') ? 'vtt' : 'srt';
+                const subFilename = `${baseFilename}.${sub.language || 'cs'}.${subExt}`;
+                const subPath = path.join(downloadDir, subFilename);
+                await downloadSubtitle(sub.src, subPath);
+            }
+        }
         
         job.status = 'done';
         logger.info(`Download complete: ${videoFilename}`);
@@ -410,6 +453,18 @@ async function processSeriesDownload(job, options) {
             });
             
             await pipelineAsync(response.data, writeStream);
+            
+            // Download subtitles if provided for this episode
+            if (ep.subtitles && Array.isArray(ep.subtitles) && ep.subtitles.length > 0) {
+                const baseEpisodeFilename = `${cleanSeriesTitle} s${seasonStr}e${episodeStr}${episodeSuffix}`;
+                logger.info(`Downloading ${ep.subtitles.length} subtitle(s) for S${seasonStr}E${episodeStr}`);
+                for (const sub of ep.subtitles) {
+                    const subExt = sub.src.toLowerCase().endsWith('.vtt') ? 'vtt' : 'srt';
+                    const subFilename = `${baseEpisodeFilename}.${sub.language || 'cs'}.${subExt}`;
+                    const subPath = path.join(seasonDir, subFilename);
+                    await downloadSubtitle(sub.src, subPath);
+                }
+            }
             
             completedEpisodes++;
             job.completedEpisodes = completedEpisodes;

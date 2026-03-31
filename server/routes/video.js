@@ -23,6 +23,7 @@ router.get('/:moviePath(*)', async (req, res) => {
             success: true,
             videoUrl: videoData.videoUrl,
             qualities: videoData.qualities,
+            subtitles: videoData.subtitles || [],
             sourceUrl: videoData.sourceUrl
         });
         

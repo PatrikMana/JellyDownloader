@@ -201,6 +201,7 @@ const MovieMode = ({ isActive }) => {
                 movie: { 
                     ...movie, 
                     qualities: data.qualities,
+                    subtitles: data.subtitles || [],
                     videoUrl: data.videoUrl 
                 }, 
                 loading: false 
@@ -211,7 +212,7 @@ const MovieMode = ({ isActive }) => {
         }
     };
 
-    const handleQualitySelect = async (movie, selectedQuality) => {
+    const handleQualitySelect = async (movie, selectedQuality, subtitles = []) => {
         setQualityModal({ open: false, movie: null, loading: false });
         
         try {
@@ -231,7 +232,8 @@ const MovieMode = ({ isActive }) => {
                 type: 'movie',
                 imdbData: imdbData,
                 quality: selectedQuality.label,
-                originalQuery: lastSearchQueryRef.current
+                originalQuery: lastSearchQueryRef.current,
+                subtitles: subtitles
             }, 'movie');
         } catch (error) {
             // Error handled in startDownload

@@ -20,7 +20,7 @@ const SeriesMode = ({ isActive }) => {
     const [qualityModal, setQualityModal] = useState({ open: false, episode: null, results: [], loading: false });
     
     // Quality selection for episode
-    const [episodeQualityModal, setEpisodeQualityModal] = useState({ open: false, episode: null, result: null, qualities: [], loading: false });
+    const [episodeQualityModal, setEpisodeQualityModal] = useState({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
     
     const { showError, showInfo, showWarning, showSuccess } = useToast();
     const { addDownload } = useDownload();
@@ -263,16 +263,17 @@ const SeriesMode = ({ isActive }) => {
             setEpisodeQualityModal(prev => ({
                 ...prev,
                 qualities: data.qualities,
+                subtitles: data.subtitles || [],
                 loading: false
             }));
         } catch (error) {
             showError('Chyba', error.message);
-            setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], loading: false });
+            setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
         }
     };
     
     // Potvrzení výběru kvality pro epizodu
-    const confirmEpisodeQuality = (selectedQuality) => {
+    const confirmEpisodeQuality = (selectedQuality, selectedSubtitles = []) => {
         const { episode, result } = episodeQualityModal;
         
         // Store selection and move to next episode
@@ -284,6 +285,7 @@ const SeriesMode = ({ isActive }) => {
                     selectedUrl: selectedQuality.src,
                     selectedQuality: selectedQuality,
                     qualities: episodeQualityModal.qualities,
+                    subtitles: selectedSubtitles,
                     prehrajtoTitle: result.title,
                     prehrajtoHref: result.href,
                     imageSrc: result.imageSrc
@@ -292,7 +294,7 @@ const SeriesMode = ({ isActive }) => {
             currentIndex: prev.currentIndex + 1
         }));
 
-        setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], loading: false });
+        setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
         setQualityModal({ open: false, episode: null, results: [], loading: false });
 
         // Search next episode or finish
@@ -311,7 +313,7 @@ const SeriesMode = ({ isActive }) => {
 
     const skipEpisode = () => {
         setQualityModal({ open: false, episode: null, results: [], loading: false });
-        setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], loading: false });
+        setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
 
         setEpisodeSearchState(prev => ({
             ...prev,
@@ -364,7 +366,8 @@ const SeriesMode = ({ isActive }) => {
                     episodeTitle: episodeSearchState.episodes.find(e => e.id === episodeId)?.title || '',
                     prehrajtoTitle: data.prehrajtoTitle,
                     videoUrl: data.selectedUrl,
-                    quality: data.selectedQuality?.label || 'Default'
+                    quality: data.selectedQuality?.label || 'Default',
+                    subtitles: data.subtitles || []
                 };
             })
         };
@@ -694,27 +697,42 @@ const SeriesMode = ({ isActive }) => {
                                         <p style={{ marginTop: 'var(--spacing-sm)' }}>Načítám dostupné kvality...</p>
                                     </div>
                                 ) : episodeQualityModal.qualities.length > 0 ? (
-                                    <div className="quality-options">
-                                        {episodeQualityModal.qualities.map((quality, idx) => (
-                                            <div
-                                                key={idx}
-                                                className="quality-option"
-                                                onClick={() => confirmEpisodeQuality(quality)}
-                                            >
-                                                <div className="quality-info">
-                                                    <div className="quality-name">
-                                                        {quality.label || `${quality.res}p` || 'Video'}
+                                    <>
+                                        <div className="quality-options">
+                                            {episodeQualityModal.qualities.map((quality, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className="quality-option"
+                                                    onClick={() => confirmEpisodeQuality(quality, episodeQualityModal.subtitles || [])}
+                                                >
+                                                    <div className="quality-info">
+                                                        <div className="quality-name">
+                                                            {quality.label || `${quality.res}p` || 'Video'}
+                                                        </div>
+                                                        <div className="quality-meta">
+                                                            {quality.res > 0 && <span>{quality.res}p</span>}
+                                                        </div>
                                                     </div>
-                                                    <div className="quality-meta">
-                                                        {quality.res > 0 && <span>{quality.res}p</span>}
-                                                    </div>
+                                                    {idx === 0 && (
+                                                        <span className="quality-best-badge">Nejvyšší</span>
+                                                    )}
                                                 </div>
-                                                {idx === 0 && (
-                                                    <span className="quality-best-badge">Nejvyšší</span>
-                                                )}
+                                            ))}
+                                        </div>
+                                        {episodeQualityModal.subtitles?.length > 0 && (
+                                            <div style={{ 
+                                                marginTop: 'var(--spacing-md)', 
+                                                padding: 'var(--spacing-sm)', 
+                                                background: 'rgba(0,255,255,0.1)', 
+                                                borderRadius: '4px',
+                                                fontSize: '0.85rem',
+                                                color: 'var(--color-glitch-cyan)'
+                                            }}>
+                                                <i className="fas fa-closed-captioning" style={{ marginRight: '0.5rem' }}></i>
+                                                Titulky budou staženy automaticky ({episodeQualityModal.subtitles.length}x)
                                             </div>
-                                        ))}
-                                    </div>
+                                        )}
+                                    </>
                                 ) : (
                                     <div style={{ textAlign: 'center', padding: 'var(--spacing-md)' }}>
                                         <i className="fas fa-exclamation-triangle" style={{ color: 'var(--color-warning)' }}></i>
@@ -724,7 +742,7 @@ const SeriesMode = ({ isActive }) => {
                             </div>
                             <div className="modal-footer">
                                 <button className="btn btn-secondary" onClick={() => {
-                                    setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], loading: false });
+                                    setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
                                 }}>
                                     <i className="fas fa-arrow-left"></i> Zpět
                                 </button>

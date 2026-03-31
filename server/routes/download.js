@@ -14,7 +14,7 @@ const { logger, jobs } = require('../utils');
  */
 router.post('/', async (req, res) => {
     try {
-        const { videoUrl, title, imdbData, type = 'movie', season = null, episode = null } = req.body;
+        const { videoUrl, title, imdbData, type = 'movie', season = null, episode = null, subtitles = [] } = req.body;
         
         if (!videoUrl || !title) {
             return res.status(400).json({ 
@@ -23,7 +23,7 @@ router.post('/', async (req, res) => {
             });
         }
         
-        logger.info(`Starting download: ${title}`);
+        logger.info(`Starting download: ${title}${subtitles.length > 0 ? ` (with ${subtitles.length} subtitles)` : ''}`);
         
         const result = await downloader.downloadFile({
             videoUrl,
@@ -31,7 +31,8 @@ router.post('/', async (req, res) => {
             imdbData,
             type,
             season,
-            episode
+            episode,
+            subtitles
         });
         
         res.json({ success: true, jobId: result.jobId });
