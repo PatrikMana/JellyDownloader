@@ -21,6 +21,9 @@ const SeriesMode = ({ isActive }) => {
     
     // Quality selection for episode
     const [episodeQualityModal, setEpisodeQualityModal] = useState({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
+    const [selectedQuality, setSelectedQuality] = useState(null);
+    const [includeSubtitles, setIncludeSubtitles] = useState(true);
+    const [selectedSubtitles, setSelectedSubtitles] = useState([]);
     
     const { showError, showInfo, showWarning, showSuccess } = useToast();
     const { addDownload } = useDownload();
@@ -246,7 +249,10 @@ const SeriesMode = ({ isActive }) => {
     // Výběr souboru pro epizodu - zobrazí výběr kvality
     const selectEpisodeFile = async (result) => {
         const episode = qualityModal.episode;
-        setEpisodeQualityModal({ open: true, episode, result, qualities: [], loading: true });
+        setEpisodeQualityModal({ open: true, episode, result, qualities: [], subtitles: [], loading: true });
+        setSelectedQuality(null);
+        setIncludeSubtitles(true);
+        setSelectedSubtitles([]);
 
         try {
             // Get video URL and qualities
@@ -266,14 +272,41 @@ const SeriesMode = ({ isActive }) => {
                 subtitles: data.subtitles || [],
                 loading: false
             }));
+            
+            // Select highest quality by default
+            if (data.qualities.length > 0) {
+                setSelectedQuality(data.qualities[0]);
+            }
+            // Select all subtitles by default
+            if (data.subtitles && data.subtitles.length > 0) {
+                setSelectedSubtitles(data.subtitles.map(s => s.src));
+            }
         } catch (error) {
             showError('Chyba', error.message);
             setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
         }
     };
     
+    const handleSubtitleToggle = (src) => {
+        setSelectedSubtitles(prev => 
+            prev.includes(src) 
+                ? prev.filter(s => s !== src)
+                : [...prev, src]
+        );
+    };
+    
+    const handleConfirmEpisodeQuality = () => {
+        if (!selectedQuality) return;
+        
+        const subtitlesToDownload = includeSubtitles 
+            ? episodeQualityModal.subtitles.filter(s => selectedSubtitles.includes(s.src))
+            : [];
+        
+        confirmEpisodeQuality(selectedQuality, subtitlesToDownload);
+    };
+    
     // Potvrzení výběru kvality pro epizodu
-    const confirmEpisodeQuality = (selectedQuality, selectedSubtitles = []) => {
+    const confirmEpisodeQuality = (quality, subtitles = []) => {
         const { episode, result } = episodeQualityModal;
         
         // Store selection and move to next episode
@@ -282,10 +315,10 @@ const SeriesMode = ({ isActive }) => {
             results: {
                 ...prev.results,
                 [episode.id]: {
-                    selectedUrl: selectedQuality.src,
-                    selectedQuality: selectedQuality,
+                    selectedUrl: quality.src,
+                    selectedQuality: quality,
                     qualities: episodeQualityModal.qualities,
-                    subtitles: selectedSubtitles,
+                    subtitles: subtitles,
                     prehrajtoTitle: result.title,
                     prehrajtoHref: result.href,
                     imageSrc: result.imageSrc
@@ -702,9 +735,10 @@ const SeriesMode = ({ isActive }) => {
                                             {episodeQualityModal.qualities.map((quality, idx) => (
                                                 <div
                                                     key={idx}
-                                                    className="quality-option"
-                                                    onClick={() => confirmEpisodeQuality(quality, episodeQualityModal.subtitles || [])}
+                                                    className={`quality-option ${selectedQuality === quality ? 'selected' : ''}`}
+                                                    onClick={() => setSelectedQuality(quality)}
                                                 >
+                                                    <div className="quality-radio"></div>
                                                     <div className="quality-info">
                                                         <div className="quality-name">
                                                             {quality.label || `${quality.res}p` || 'Video'}
@@ -719,17 +753,56 @@ const SeriesMode = ({ isActive }) => {
                                                 </div>
                                             ))}
                                         </div>
+                                        
+                                        {/* Subtitles section */}
                                         {episodeQualityModal.subtitles?.length > 0 && (
-                                            <div style={{ 
-                                                marginTop: 'var(--spacing-md)', 
-                                                padding: 'var(--spacing-sm)', 
-                                                background: 'rgba(0,255,255,0.1)', 
-                                                borderRadius: '4px',
-                                                fontSize: '0.85rem',
-                                                color: 'var(--color-glitch-cyan)'
-                                            }}>
-                                                <i className="fas fa-closed-captioning" style={{ marginRight: '0.5rem' }}></i>
-                                                Titulky budou staženy automaticky ({episodeQualityModal.subtitles.length}x)
+                                            <div style={{ marginTop: 'var(--spacing-md)', borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-md)' }}>
+                                                <label 
+                                                    style={{ 
+                                                        display: 'flex', 
+                                                        alignItems: 'center', 
+                                                        gap: '0.5rem', 
+                                                        cursor: 'pointer',
+                                                        marginBottom: 'var(--spacing-sm)'
+                                                    }}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={includeSubtitles}
+                                                        onChange={(e) => setIncludeSubtitles(e.target.checked)}
+                                                        style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                                                    />
+                                                    <span style={{ fontWeight: '500' }}>
+                                                        <i className="fas fa-closed-captioning" style={{ marginRight: '0.5rem' }}></i>
+                                                        Stáhnout titulky
+                                                    </span>
+                                                </label>
+                                                
+                                                {includeSubtitles && (
+                                                    <div style={{ marginLeft: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                                        {episodeQualityModal.subtitles.map((sub, index) => (
+                                                            <label 
+                                                                key={index}
+                                                                style={{ 
+                                                                    display: 'flex', 
+                                                                    alignItems: 'center', 
+                                                                    gap: '0.5rem', 
+                                                                    cursor: 'pointer',
+                                                                    color: 'var(--color-text-muted)',
+                                                                    fontSize: '0.9rem'
+                                                                }}
+                                                            >
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={selectedSubtitles.includes(sub.src)}
+                                                                    onChange={() => handleSubtitleToggle(sub.src)}
+                                                                    style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+                                                                />
+                                                                <span>{sub.label || sub.language || 'Titulky'}</span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                     </>
@@ -745,6 +818,13 @@ const SeriesMode = ({ isActive }) => {
                                     setEpisodeQualityModal({ open: false, episode: null, result: null, qualities: [], subtitles: [], loading: false });
                                 }}>
                                     <i className="fas fa-arrow-left"></i> Zpět
+                                </button>
+                                <button 
+                                    className="btn btn-primary" 
+                                    onClick={handleConfirmEpisodeQuality}
+                                    disabled={!selectedQuality}
+                                >
+                                    <i className="fas fa-check"></i> Potvrdit
                                 </button>
                             </div>
                         </div>
