@@ -1,0 +1,97 @@
+name: jellydownloader
+services:
+  jellydownloader:
+    image: ghcr.io/PatrikMana/jellydownloader:latest
+    container_name: jellydownloader
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - target: 6565
+        published: "6565"
+        protocol: tcp
+    environment:
+      - PORT=6565
+      - OMDB_API_KEY=
+      - TMDB_API_KEY=
+      - MOVIES_DIR=/downloads/movies
+      - SERIES_DIR=/downloads/tvshows
+      - ANIME_DIR=/downloads/anime
+    volumes:
+      - type: bind
+        source: /DATA/AppData/jellydownloader/config
+        target: /config
+      - type: bind
+        source: /DATA/Media
+        target: /downloads
+    x-casaos:
+      envs:
+        - container: OMDB_API_KEY
+          description:
+            en_us: "OMDB API Key for movie metadata (get free key at omdbapi.com)"
+            cs_cz: "OMDB API klíč pro metadata filmů (získej zdarma na omdbapi.com)"
+        - container: TMDB_API_KEY
+          description:
+            en_us: "TMDB API Key for additional metadata (optional)"
+            cs_cz: "TMDB API klíč pro dodatečná metadata (volitelné)"
+      ports:
+        - container: "6565"
+          description:
+            en_us: "Web UI Port"
+            cs_cz: "Port webového rozhraní"
+      volumes:
+        - container: /config
+          description:
+            en_us: "Config directory"
+            cs_cz: "Složka s konfigurací"
+        - container: /downloads
+          description:
+            en_us: "Media downloads directory (map to your Jellyfin library)"
+            cs_cz: "Složka pro stažená média (namapuj na knihovnu Jellyfin)"
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  author: JPMP Production
+  category: Downloader
+  description:
+    en_us: |
+      Prehrajto Downloader is a web application for searching and downloading movies/series from prehrajto.cz with automatic Jellyfin-compatible naming.
+      
+      Features:
+      - Search movies and TV series
+      - Multiple quality options
+      - Subtitle download support
+      - Automatic Jellyfin naming convention
+      - IMDB/TMDB metadata integration
+    cs_cz: |
+      Prehrajto Downloader je webová aplikace pro vyhledávání a stahování filmů/seriálů z prehrajto.cz s automatickým pojmenováním kompatibilním s Jellyfin.
+      
+      Funkce:
+      - Vyhledávání filmů a seriálů
+      - Výběr kvality videa
+      - Podpora stahování titulků
+      - Automatické pojmenování pro Jellyfin
+      - Integrace s IMDB/TMDB metadaty
+  developer: JPMP Production
+  icon: https://raw.githubusercontent.com/PatrikMana/jellydownloader/main/app/icon.png
+  index: /
+  main: jellydownloader
+  port_map: "6565"
+  scheme: http
+  store_app_id: jellydownloader
+  tagline:
+    en_us: Download movies and series from prehrajto.cz
+    cs_cz: Stahuj filmy a seriály z prehrajto.cz
+  thumbnail: https://raw.githubusercontent.com/PatrikMana/jellydownloader/main/app/icon.png
+  title:
+    en_us: JellyDownloader
+    cs_cz: JellyDownloader
+  tips:
+    before_install:
+      en_us: |
+        Make sure to configure your media directory paths to match your Jellyfin library.
+        Get a free OMDB API key at https://www.omdbapi.com/apikey.aspx for movie metadata.
+      cs_cz: |
+        Ujisti se, že cesty k médiím odpovídají tvé Jellyfin knihovně.
+        Získej zdarma OMDB API klíč na https://www.omdbapi.com/apikey.aspx pro metadata filmů.
