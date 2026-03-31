@@ -14,18 +14,13 @@ services:
       - DOCKER_CONTAINER=true
       - OMDB_API_KEY=
       - TMDB_API_KEY=
-      - DOWNLOADS_DIR=/downloads
-      - CONFIG_DIR=/config
-      - MOVIES_DIR=/downloads/movies
-      - SERIES_DIR=/downloads/tvshows
-      - ANIME_DIR=/downloads/anime
     volumes:
       - type: bind
         source: /DATA/AppData/jellydownloader/config
         target: /config
       - type: bind
         source: /DATA/Media
-        target: /downloads
+        target: /jellyfin
     x-casaos:
       envs:
         - container: OMDB_API_KEY
@@ -46,10 +41,10 @@ services:
           description:
             en_us: "Config directory"
             cs_cz: "Složka s konfigurací"
-        - container: /downloads
+        - container: /jellyfin
           description:
-            en_us: "Media downloads directory (map to your Jellyfin library)"
-            cs_cz: "Složka pro stažená média (namapuj na knihovnu Jellyfin)"
+            en_us: "Jellyfin media library (Movies, TV Shows, etc.)"
+            cs_cz: "Jellyfin knihovna médií (Filmy, Seriály, atd.)"
 
 x-casaos:
   architectures:
@@ -59,7 +54,7 @@ x-casaos:
   category: Downloader
   description:
     en_us: |
-      Prehrajto Downloader is a web application for searching and downloading movies/series from prehrajto.cz with automatic Jellyfin-compatible naming.
+      JellyDownloader is a web application for searching and downloading movies/series from prehrajto.cz with automatic Jellyfin-compatible naming.
       
       Features:
       - Search movies and TV series
@@ -68,7 +63,7 @@ x-casaos:
       - Automatic Jellyfin naming convention
       - IMDB/TMDB metadata integration
     cs_cz: |
-      Prehrajto Downloader je webová aplikace pro vyhledávání a stahování filmů/seriálů z prehrajto.cz s automatickým pojmenováním kompatibilním s Jellyfin.
+      JellyDownloader je webová aplikace pro vyhledávání a stahování filmů/seriálů z prehrajto.cz s automatickým pojmenováním kompatibilním s Jellyfin.
       
       Funkce:
       - Vyhledávání filmů a seriálů
@@ -93,8 +88,10 @@ x-casaos:
   tips:
     before_install:
       en_us: |
-        Make sure to configure your media directory paths to match your Jellyfin library.
+        Mount your Jellyfin media library to /jellyfin in the container.
+        Then use Settings to configure Movies, TV Shows and Anime folders.
         Get a free OMDB API key at https://www.omdbapi.com/apikey.aspx for movie metadata.
       cs_cz: |
-        Ujisti se, že cesty k médiím odpovídají tvé Jellyfin knihovně.
+        Namapuj svou Jellyfin knihovnu na /jellyfin v kontejneru.
+        Pak v Nastavení nakonfiguruj složky pro Filmy, Seriály a Anime.
         Získej zdarma OMDB API klíč na https://www.omdbapi.com/apikey.aspx pro metadata filmů.

@@ -68,13 +68,23 @@ app.get('/api/browse-directory', (req, res) => {
     try {
         const requestedPath = req.query.path || '';
         const isDocker = config.isDocker;
-        const dockerRoots = ['/downloads', '/config'];
+        
+        // Common Docker mount points - check which ones exist
+        const possibleRoots = ['/downloads', '/jellyfin', '/media', '/data', '/config'];
+        const dockerRoots = possibleRoots.filter(p => fs.existsSync(p));
         
         let browsePath;
         if (requestedPath && requestedPath !== '') {
             browsePath = path.resolve(requestedPath);
         } else if (isDocker) {
-            browsePath = '/downloads';
+            // Prefer /jellyfin if it exists, otherwise /downloads
+            if (fs.existsSync('/jellyfin')) {
+                browsePath = '/jellyfin';
+            } else if (fs.existsSync('/downloads')) {
+                browsePath = '/downloads';
+            } else {
+                browsePath = '/';
+            }
         } else {
             browsePath = process.env.HOME || process.env.USERPROFILE || '/';
         }
