@@ -1,19 +1,21 @@
 # Build stage - frontend
 FROM node:20-alpine AS frontend-builder
 
-WORKDIR /app/frontend
+WORKDIR /app
 
 # Copy frontend package files
-COPY frontend/package*.json ./
+COPY frontend/package*.json ./frontend/
 
 # Install frontend dependencies
+WORKDIR /app/frontend
 RUN npm ci
 
 # Copy frontend source
 COPY frontend/ ./
 
-# Build frontend
-RUN npm run build
+# Build frontend (outputs to /app/public-react)
+WORKDIR /app
+RUN cd frontend && npm run build
 
 # Production stage
 FROM node:20-alpine
@@ -33,7 +35,7 @@ RUN npm ci --omit=dev
 COPY server/ ./server/
 
 # Copy built frontend from builder stage
-COPY --from=frontend-builder /app/frontend/dist ./public-react/
+COPY --from=frontend-builder /app/public-react ./public-react/
 
 # Create directories for data persistence
 RUN mkdir -p /app/downloads /app/logs /config
