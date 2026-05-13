@@ -1,6 +1,6 @@
 /**
  * Anime API Service - Direct Scraper
- * Scrapes anime from hianime.to (formerly zoro.to)
+ * Scrapes anime from hianimetv.su (formerly zoro.to)
  * Based on: https://github.com/itzzzme/anime-api
  */
 
@@ -10,7 +10,7 @@ const CryptoJS = require('crypto-js');
 const { logger } = require('../utils');
 
 // Base URLs
-const BASE_URL = 'hianime.to';
+const BASE_URL = 'hianimetv.su';
 const FALLBACK_URL_1 = 'megaplay.buzz';
 const FALLBACK_URL_2 = 'vidwish.live';
 

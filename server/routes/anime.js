@@ -18,7 +18,7 @@ router.get('/health', async (req, res) => {
     const healthy = await animeApi.checkHealth();
     res.json({ 
         success: healthy, 
-        message: healthy ? 'Anime scraper is working (hianime.to)' : 'Anime scraper is not working'
+        message: healthy ? 'Anime scraper is working (hianimetv.su)' : 'Anime scraper is not working'
     });
 });
 
