@@ -30,7 +30,7 @@ const AnimeMode = ({ isActive }) => {
             const data = await response.json();
             setApiStatus(data);
             if (!data.success) {
-                showWarning('Anime API nedostupné', `Nastav ANIME_API_URL v .env (aktuálně: ${data.apiUrl})`);
+                showWarning('Anime scraper nedostupný', `Zkontroluj ANIME_BASE_URL v .env (aktuálně: ${data.baseUrl || 'výchozí'})`);
             }
         } catch (error) {
             setApiStatus({ success: false, message: 'Could not check API status' });
@@ -195,12 +195,12 @@ const AnimeMode = ({ isActive }) => {
                         marginBottom: '20px'
                     }}>
                         <i className="fas fa-exclamation-triangle" style={{ color: '#ffc107', marginRight: '10px' }}></i>
-                        <strong>Anime API není dostupné.</strong>
+                        <strong>Anime scraper není dostupný.</strong>
                         <p style={{ margin: '10px 0 0', fontSize: '14px' }}>
-                            Nastav <code>ANIME_API_URL</code> v souboru <code>.env</code> na URL tvé instance anime-api.
+                            Nastav <code>ANIME_BASE_URL</code> v souboru <code>.env</code> na funkční HiAnime-kompatibilní doménu.
                             <br />
-                            <a href="https://github.com/itzzzme/anime-api" target="_blank" rel="noopener noreferrer">
-                                Návod na instalaci anime-api →
+                            <a href="https://github.com/poypoy252525/hianime" target="_blank" rel="noopener noreferrer">
+                                Použitý scraper pattern →
                             </a>
                         </p>
                     </div>

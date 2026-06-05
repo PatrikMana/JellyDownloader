@@ -26,9 +26,16 @@ export const DownloadProvider = ({ children }) => {
     };
 
     const formatSeconds = (seconds) => {
-        if (!seconds || seconds === Infinity) return '--:--';
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
+        if (seconds == null || seconds === Infinity || Number.isNaN(seconds)) return '--:--';
+        const safeSeconds = Math.max(0, Math.floor(seconds));
+        const hours = Math.floor(safeSeconds / 3600);
+        const mins = Math.floor((safeSeconds % 3600) / 60);
+        const secs = safeSeconds % 60;
+
+        if (hours > 0) {
+            return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
@@ -80,7 +87,12 @@ export const DownloadProvider = ({ children }) => {
                     updateDownload(downloadId, {
                         status: 'completed',
                         progress: 100,
-                        downloaded: data.downloadedBytes || data.totalBytes || 0
+                        downloaded: data.downloadedBytes || data.totalBytes || 0,
+                        completedEpisodes: data.completedEpisodes,
+                        currentEpisode: data.completedEpisodes || data.totalEpisodes,
+                        totalEpisodes: data.totalEpisodes,
+                        speed: 0,
+                        eta: 0
                     });
                     stopPolling(downloadId);
                     // Check if it's series completion
@@ -99,26 +111,60 @@ export const DownloadProvider = ({ children }) => {
                 } else if (data.type === 'progress') {
                     // Map backend field names to frontend
                     updateDownload(downloadId, {
-                        progress: data.progress || 0,
-                        downloaded: data.downloadedBytes || 0,
-                        speed: data.speedBps || 0,
+                        progress: data.progress ?? 0,
+                        episodeProgress: data.episodeProgress,
+                        downloaded: data.downloadedBytes ?? 0,
+                        speed: data.speedBps ?? 0,
                         eta: data.etaSec,
+                        currentEpisodeEta: data.currentEpisodeEtaSec,
                         size: data.totalBytes || 0,
                         // Series specific
                         currentEpisode: data.currentEpisode,
-                        totalEpisodes: data.totalEpisodes
+                        totalEpisodes: data.totalEpisodes,
+                        season: data.season,
+                        episode: data.episode,
+                        episodeCode: data.episodeCode,
+                        episodeTitle: data.episodeTitle,
+                        message: data.message
                     });
                 } else if (data.type === 'episode-start') {
                     updateDownload(downloadId, {
                         status: 'downloading',
+                        progress: data.progress ?? 0,
                         currentEpisode: data.currentIndex,
                         totalEpisodes: data.totalEpisodes,
-                        episodeTitle: data.episodeTitle
+                        season: data.season,
+                        episode: data.episode,
+                        episodeCode: data.episodeCode,
+                        episodeTitle: data.episodeTitle,
+                        episodeProgress: 0,
+                        downloaded: 0,
+                        size: 0,
+                        speed: 0,
+                        eta: data.etaSec ?? null
                     });
                 } else if (data.type === 'episode-done') {
                     updateDownload(downloadId, {
+                        progress: data.progress ?? 100,
                         completedEpisodes: data.completedEpisodes,
-                        totalEpisodes: data.totalEpisodes
+                        totalEpisodes: data.totalEpisodes,
+                        currentEpisode: data.completedEpisodes,
+                        season: data.season,
+                        episode: data.episode,
+                        episodeCode: data.episodeCode,
+                        episodeTitle: data.episodeTitle,
+                        episodeProgress: 100,
+                        eta: data.etaSec ?? null,
+                        speed: 0
+                    });
+                } else if (data.type === 'episode-error') {
+                    updateDownload(downloadId, {
+                        status: 'downloading',
+                        season: data.season,
+                        episode: data.episode,
+                        episodeCode: data.episodeCode,
+                        episodeTitle: data.episodeTitle,
+                        error: data.error
                     });
                 }
             } catch (error) {

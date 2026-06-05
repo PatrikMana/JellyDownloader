@@ -102,6 +102,30 @@ function removeEmptyDirsUp(startDir, stopAtDir) {
     }
 }
 
+function formatEpisodeCode(season, episode) {
+    return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+}
+
+function getBatchProgress(completedEpisodes, totalEpisodes, episodeProgress = 0) {
+    if (!totalEpisodes) return episodeProgress || 0;
+    const safeEpisodeProgress = Math.max(0, Math.min(100, episodeProgress || 0));
+    return Math.min(100, ((completedEpisodes + safeEpisodeProgress / 100) / totalEpisodes) * 100);
+}
+
+function getBatchEtaSec({ episodeEtaSec, completedEpisodes, totalEpisodes, batchStartTime }) {
+    if (!totalEpisodes) return episodeEtaSec ?? null;
+
+    const remainingEpisodesAfterCurrent = Math.max(0, totalEpisodes - completedEpisodes - 1);
+    const elapsedSec = Math.max(0, (Date.now() - batchStartTime) / 1000);
+    const averageEpisodeSec = completedEpisodes > 0 ? elapsedSec / completedEpisodes : null;
+
+    if (episodeEtaSec == null) {
+        return averageEpisodeSec != null ? averageEpisodeSec * (remainingEpisodesAfterCurrent + 1) : null;
+    }
+
+    return episodeEtaSec + (averageEpisodeSec != null ? averageEpisodeSec * remainingEpisodesAfterCurrent : 0);
+}
+
 /**
  * Download subtitle file
  * @param {string} url - Subtitle URL
@@ -349,6 +373,7 @@ async function processSeriesDownload(job, options) {
     job.downloadDir = seriesDir;
     
     let completedEpisodes = 0;
+    const batchStartTime = Date.now();
     
     try {
         for (let i = 0; i < episodes.length; i++) {
@@ -360,6 +385,8 @@ async function processSeriesDownload(job, options) {
             const ep = episodes[i];
             const seasonStr = String(ep.season).padStart(2, '0');
             const episodeStr = String(ep.episode).padStart(2, '0');
+            const episodeCode = formatEpisodeCode(ep.season, ep.episode);
+            const episodeTitle = ep.episodeTitle || ep.prehrajtoTitle || `Episode ${ep.episode}`;
             
             // Emit episode start
             emitJobEvent(job, {
@@ -367,9 +394,11 @@ async function processSeriesDownload(job, options) {
                 jobId: job.jobId,
                 season: ep.season,
                 episode: ep.episode,
-                episodeTitle: ep.episodeTitle || ep.prehrajtoTitle,
+                episodeCode,
+                episodeTitle,
                 currentIndex: i + 1,
-                totalEpisodes: episodes.length
+                totalEpisodes: episodes.length,
+                progress: getBatchProgress(completedEpisodes, episodes.length, 0)
             });
             
             // Get episode IMDB ID
@@ -428,23 +457,35 @@ async function processSeriesDownload(job, options) {
                     const dt = (now - lastTickTime) / 1000;
                     const dB = downloadedBytes - lastTickBytes;
                     const speed = dt > 0 ? (dB / dt) : 0;
-                    const etaSec = (totalBytes > 0 && speed > 0) 
+                    const currentEpisodeEtaSec = (totalBytes > 0 && speed > 0) 
                         ? ((totalBytes - downloadedBytes) / speed) 
                         : null;
-                    const progress = totalBytes > 0 
+                    const episodeProgress = totalBytes > 0 
                         ? (downloadedBytes / totalBytes * 100) 
                         : 0;
+                    const etaSec = getBatchEtaSec({
+                        episodeEtaSec: currentEpisodeEtaSec,
+                        completedEpisodes,
+                        totalEpisodes: episodes.length,
+                        batchStartTime
+                    });
                     
                     emitJobEvent(job, {
                         type: 'progress',
                         jobId: job.jobId,
                         downloadedBytes,
                         totalBytes,
-                        progress,
+                        progress: getBatchProgress(completedEpisodes, episodes.length, episodeProgress),
+                        episodeProgress,
                         speedBps: speed,
                         etaSec,
+                        currentEpisodeEtaSec,
                         currentEpisode: i + 1,
-                        totalEpisodes: episodes.length
+                        totalEpisodes: episodes.length,
+                        season: ep.season,
+                        episode: ep.episode,
+                        episodeCode,
+                        episodeTitle
                     });
                     
                     lastTickBytes = downloadedBytes;
@@ -476,9 +517,18 @@ async function processSeriesDownload(job, options) {
                 jobId: job.jobId,
                 season: ep.season,
                 episode: ep.episode,
+                episodeCode,
+                episodeTitle,
                 filename: episodeFilename,
                 completedEpisodes,
-                totalEpisodes: episodes.length
+                totalEpisodes: episodes.length,
+                progress: getBatchProgress(completedEpisodes, episodes.length, 0),
+                etaSec: getBatchEtaSec({
+                    episodeEtaSec: null,
+                    completedEpisodes,
+                    totalEpisodes: episodes.length,
+                    batchStartTime
+                })
             });
         }
         
@@ -710,12 +760,12 @@ async function processAnimeSeriesDownload(job, options) {
     
     const paths = config.getDownloadPaths();
     const cleanAnimeTitle = sanitizeFilename(animeTitle);
-    const seriesSuffix = seriesImdbId ? ` [imdbid-${seriesImdbId}]` : '';
-    const animeDir = path.join(paths.anime, `${cleanAnimeTitle}${seriesSuffix}`);
+    const animeDir = paths.anime;
     
     job.downloadDir = animeDir;
     
     let completedEpisodes = 0;
+    const batchStartTime = Date.now();
     
     try {
         for (let i = 0; i < episodes.length; i++) {
@@ -727,6 +777,8 @@ async function processAnimeSeriesDownload(job, options) {
             const ep = episodes[i];
             const seasonStr = String(ep.season).padStart(2, '0');
             const episodeStr = String(ep.episode).padStart(2, '0');
+            const episodeCode = formatEpisodeCode(ep.season, ep.episode);
+            const episodeTitle = ep.episodeTitle || `Episode ${ep.episode}`;
             
             // Emit episode start
             emitJobEvent(job, {
@@ -734,9 +786,11 @@ async function processAnimeSeriesDownload(job, options) {
                 jobId: job.jobId,
                 season: ep.season,
                 episode: ep.episode,
-                episodeTitle: ep.episodeTitle,
+                episodeCode,
+                episodeTitle,
                 currentIndex: i + 1,
-                totalEpisodes: episodes.length
+                totalEpisodes: episodes.length,
+                progress: getBatchProgress(completedEpisodes, episodes.length, 0)
             });
             
             // Get episode IMDB ID if available
@@ -765,7 +819,16 @@ async function processAnimeSeriesDownload(job, options) {
             
             // Download using ffmpeg for HLS
             try {
-                await downloadHLSEpisode(ep.videoUrl, episodePath, ep.referer, job, i, episodes.length);
+                await downloadHLSEpisode(ep.videoUrl, episodePath, ep.referer, job, {
+                    episodeIndex: i,
+                    totalEpisodes: episodes.length,
+                    completedEpisodes,
+                    batchStartTime,
+                    season: ep.season,
+                    episode: ep.episode,
+                    episodeCode,
+                    episodeTitle
+                });
                 
                 completedEpisodes++;
                 job.completedEpisodes = completedEpisodes;
@@ -777,9 +840,18 @@ async function processAnimeSeriesDownload(job, options) {
                     jobId: job.jobId,
                     season: ep.season,
                     episode: ep.episode,
+                    episodeCode,
+                    episodeTitle,
                     filename: episodeFilename,
                     completedEpisodes,
-                    totalEpisodes: episodes.length
+                    totalEpisodes: episodes.length,
+                    progress: getBatchProgress(completedEpisodes, episodes.length, 0),
+                    etaSec: getBatchEtaSec({
+                        episodeEtaSec: null,
+                        completedEpisodes,
+                        totalEpisodes: episodes.length,
+                        batchStartTime
+                    })
                 });
             } catch (epError) {
                 logger.error(`Failed to download episode ${ep.episode}: ${epError.message}`);
@@ -789,6 +861,8 @@ async function processAnimeSeriesDownload(job, options) {
                     jobId: job.jobId,
                     season: ep.season,
                     episode: ep.episode,
+                    episodeCode,
+                    episodeTitle,
                     error: epError.message
                 });
             }
@@ -831,12 +905,22 @@ async function processAnimeSeriesDownload(job, options) {
  * @param {string} outputPath - Output file path
  * @param {string} referer - Referer header
  * @param {Object} job - Job object for progress reporting
- * @param {number} episodeIndex - Current episode index
- * @param {number} totalEpisodes - Total episodes count
+ * @param {Object} progressContext - Episode and batch progress metadata
  * @returns {Promise<void>}
  */
-async function downloadHLSEpisode(hlsUrl, outputPath, referer, job, episodeIndex, totalEpisodes) {
+async function downloadHLSEpisode(hlsUrl, outputPath, referer, job, progressContext) {
     return new Promise((resolve, reject) => {
+        const {
+            episodeIndex,
+            totalEpisodes,
+            completedEpisodes,
+            batchStartTime,
+            season,
+            episode,
+            episodeCode,
+            episodeTitle
+        } = progressContext;
+
         // Build ffmpeg arguments with proper headers
         const ffmpegArgs = [
             '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -856,9 +940,31 @@ async function downloadHLSEpisode(hlsUrl, outputPath, referer, job, episodeIndex
         );
         
         const ffmpeg = spawn(ffmpegPath, ffmpegArgs);
+        job.ffmpegProcess = ffmpeg;
         
         let lastProgress = 0;
         let duration = 0;
+        let lastSizeBytes = 0;
+        let lastSizeTickTime = Date.now();
+
+        const parseFfmpegSizeBytes = (output) => {
+            const sizeMatch = output.match(/size=\s*([0-9.]+)\s*([KMG]?i?B)/i);
+            if (!sizeMatch) return null;
+
+            const value = parseFloat(sizeMatch[1]);
+            const unit = sizeMatch[2].toLowerCase();
+            const multipliers = {
+                b: 1,
+                kb: 1024,
+                kib: 1024,
+                mb: 1024 * 1024,
+                mib: 1024 * 1024,
+                gb: 1024 * 1024 * 1024,
+                gib: 1024 * 1024 * 1024
+            };
+
+            return Math.round(value * (multipliers[unit] || 1));
+        };
         
         ffmpeg.stderr.on('data', (data) => {
             const output = data.toString();
@@ -871,21 +977,50 @@ async function downloadHLSEpisode(hlsUrl, outputPath, referer, job, episodeIndex
             }
             
             // Parse progress
-            const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2})/);
+            const timeMatch = output.match(/time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/);
             if (timeMatch && duration > 0) {
                 const [, hours, minutes, seconds] = timeMatch;
-                const currentTime = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds);
-                const progress = Math.min(99, (currentTime / duration) * 100);
+                const currentTime = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseFloat(seconds);
+                const episodeProgress = Math.min(99, (currentTime / duration) * 100);
+                const speedFactor = parseFloat(output.match(/speed=\s*([0-9.]+)x/)?.[1]) || 0;
+                const currentEpisodeEtaSec = speedFactor > 0 ? Math.max(0, (duration - currentTime) / speedFactor) : null;
+                const etaSec = getBatchEtaSec({
+                    episodeEtaSec: currentEpisodeEtaSec,
+                    completedEpisodes,
+                    totalEpisodes,
+                    batchStartTime
+                });
+
+                const sizeBytes = parseFfmpegSizeBytes(output);
+                const now = Date.now();
+                let speedBps = 0;
+
+                if (sizeBytes != null && sizeBytes >= lastSizeBytes) {
+                    const dt = (now - lastSizeTickTime) / 1000;
+                    const dB = sizeBytes - lastSizeBytes;
+                    speedBps = dt > 0 ? dB / dt : 0;
+                    lastSizeBytes = sizeBytes;
+                    lastSizeTickTime = now;
+                }
                 
-                if (progress > lastProgress + 2) {
-                    lastProgress = progress;
+                if (episodeProgress > lastProgress + 2) {
+                    lastProgress = episodeProgress;
                     emitJobEvent(job, {
                         type: 'progress',
                         jobId: job.jobId,
-                        progress,
+                        progress: getBatchProgress(completedEpisodes, totalEpisodes, episodeProgress),
+                        episodeProgress,
+                        downloadedBytes: sizeBytes || 0,
+                        speedBps,
+                        etaSec,
+                        currentEpisodeEtaSec,
                         currentEpisode: episodeIndex + 1,
                         totalEpisodes,
-                        message: `Episode ${episodeIndex + 1}/${totalEpisodes}: ${Math.round(progress)}%`
+                        season,
+                        episode,
+                        episodeCode,
+                        episodeTitle,
+                        message: `${episodeCode}: ${Math.round(episodeProgress)}%`
                     });
                 }
             }

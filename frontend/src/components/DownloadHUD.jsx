@@ -22,8 +22,23 @@ const DownloadHUD = () => {
         }
     };
 
-    const getStatusText = (status) => {
-        switch (status) {
+    const getEpisodeText = (download) => {
+        if (!download.totalEpisodes || !download.currentEpisode) return null;
+
+        const episodeCode = download.episodeCode
+            || (download.season && download.episode
+                ? `S${String(download.season).padStart(2, '0')}E${String(download.episode).padStart(2, '0')}`
+                : null);
+        const parts = [`Díl ${download.currentEpisode}/${download.totalEpisodes}`];
+
+        if (episodeCode) parts.push(episodeCode);
+        if (download.episodeTitle) parts.push(download.episodeTitle);
+
+        return parts.join(' · ');
+    };
+
+    const getStatusText = (download) => {
+        switch (download.status) {
             case 'downloading': return 'Stahování...';
             case 'completed': return 'Dokončeno';
             case 'error': return 'Chyba';
@@ -59,7 +74,7 @@ const DownloadHUD = () => {
                                 <div className="hud-card-info">
                                     <div className="hud-card-title">{download.title}</div>
                                     <div className="hud-card-meta">
-                                        {download.size > 0 && formatBytes(download.size)}
+                                        {getEpisodeText(download) || (download.size > 0 && formatBytes(download.size))}
                                     </div>
                                 </div>
                             </div>
@@ -74,8 +89,9 @@ const DownloadHUD = () => {
                                     <div className="hud-progress-text">
                                         <span>{Math.round(download.progress || 0)}%</span>
                                         <span>
-                                            {download.downloaded > 0 && `${formatBytes(download.downloaded)}`}
-                                            {download.size > 0 && ` / ${formatBytes(download.size)}`}
+                                            {download.episodeProgress != null && `Epizoda ${Math.round(download.episodeProgress)}%`}
+                                            {download.episodeProgress == null && download.downloaded > 0 && `${formatBytes(download.downloaded)}`}
+                                            {download.episodeProgress == null && download.size > 0 && ` / ${formatBytes(download.size)}`}
                                         </span>
                                     </div>
                                 </div>
@@ -89,13 +105,13 @@ const DownloadHUD = () => {
                                     <div className="hud-stat">
                                         <span className="hud-stat-label">Zbývá</span>
                                         <span className="hud-stat-value">
-                                            {download.eta ? formatSeconds(download.eta) : '--:--'}
+                                            {download.eta != null ? formatSeconds(download.eta) : '--:--'}
                                         </span>
                                     </div>
                                 </div>
                                 <div className={`hud-card-status ${download.status}`}>
                                     <i className={`fas ${getStatusIcon(download.status)}`}></i>
-                                    <span>{getStatusText(download.status)}</span>
+                                    <span>{download.message || getStatusText(download)}</span>
                                 </div>
                             </div>
                         </div>

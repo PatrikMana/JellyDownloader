@@ -19,7 +19,7 @@ router.get('/', (req, res) => {
         logger.request('GET', '/api/settings');
         
         // Read current .env values
-        let env = {};
+        let env = { ...process.env };
         if (fs.existsSync(config.envPath)) {
             const content = fs.readFileSync(config.envPath, 'utf8');
             content.split('\n').forEach(line => {

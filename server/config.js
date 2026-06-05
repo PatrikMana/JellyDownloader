@@ -60,7 +60,7 @@ const config = {
     
     // Get download paths (re-reads .env for latest values)
     getDownloadPaths: () => {
-        let env = {};
+        let env = { ...process.env };
         if (fs.existsSync(ENV_PATH)) {
             const content = fs.readFileSync(ENV_PATH, 'utf8');
             content.split('\n').forEach(line => {
