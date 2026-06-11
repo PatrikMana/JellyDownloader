@@ -15,11 +15,13 @@ const { logger } = require('../utils');
  * Check if anime scraper is working
  */
 router.get('/health', async (req, res) => {
-    const healthy = await animeApi.checkHealth();
+    const health = await animeApi.checkSourcesHealth();
+    const healthy = health.success;
     res.json({ 
         success: healthy, 
-        message: healthy ? `Anime scraper is working (${animeApi.getBaseUrl()})` : 'Anime scraper is not working',
-        baseUrl: animeApi.getBaseUrl()
+        message: healthy ? 'At least one anime scraper is working' : 'Anime scrapers are not working',
+        baseUrl: animeApi.getBaseUrl(),
+        sources: health.sources
     });
 });
 
@@ -30,9 +32,10 @@ router.get('/health', async (req, res) => {
 router.get('/search/:query', async (req, res) => {
     try {
         const { query } = req.params;
-        logger.info(`GET /api/anime/search/${query}`);
+        const sources = req.query.sources || req.query.source;
+        logger.info(`GET /api/anime/search/${query}`, { sources });
 
-        const result = await animeApi.searchAnime(query);
+        const result = await animeApi.searchAnime(query, { sources });
         res.json(result);
     } catch (error) {
         logger.error('Anime search failed', { error: error.message });
@@ -64,9 +67,10 @@ router.get('/info/:animeId', async (req, res) => {
 router.get('/episodes/:animeId', async (req, res) => {
     try {
         const { animeId } = req.params;
-        logger.info(`GET /api/anime/episodes/${animeId}`);
+        const { source = 'hianime' } = req.query;
+        logger.info(`GET /api/anime/episodes/${animeId}`, { source });
 
-        const result = await animeApi.getEpisodes(animeId);
+        const result = await animeApi.getEpisodes(animeId, source);
         res.json(result);
     } catch (error) {
         logger.error('Get episodes failed', { error: error.message });
@@ -81,9 +85,10 @@ router.get('/episodes/:animeId', async (req, res) => {
 router.get('/servers/:episodeId(*)', async (req, res) => {
     try {
         const episodeId = req.params.episodeId;
-        logger.info(`GET /api/anime/servers/${episodeId}`);
+        const { source = 'hianime' } = req.query;
+        logger.info(`GET /api/anime/servers/${episodeId}`, { source });
 
-        const result = await animeApi.getServers(episodeId);
+        const result = await animeApi.getServers(episodeId, source);
         res.json(result);
     } catch (error) {
         logger.error('Get servers failed', { error: error.message });
@@ -98,10 +103,10 @@ router.get('/servers/:episodeId(*)', async (req, res) => {
 router.get('/stream/:episodeId(*)', async (req, res) => {
     try {
         const episodeId = req.params.episodeId;
-        const { server = 'hd-1', type = 'dub' } = req.query;
-        logger.info(`GET /api/anime/stream/${episodeId}?server=${server}&type=${type}`);
+        const { server = 'hd-1', type = 'dub', source = 'hianime' } = req.query;
+        logger.info(`GET /api/anime/stream/${episodeId}?server=${server}&type=${type}`, { source });
 
-        const result = await animeApi.getStreamingInfo(episodeId, server, type);
+        const result = await animeApi.getStreamingInfo(episodeId, server, type, source);
         res.json(result);
     } catch (error) {
         logger.error('Get stream failed', { error: error.message });
@@ -115,11 +120,12 @@ router.get('/stream/:episodeId(*)', async (req, res) => {
  */
 router.post('/download', async (req, res) => {
     try {
-        const { animeTitle, animeId, episodes } = req.body;
-        logger.info(`POST /api/anime/download - ${animeTitle} (${episodes.length} episodes)`);
+        const { animeTitle, animeId, episodes, source = 'hianime' } = req.body;
+        const episodeCount = Array.isArray(episodes) ? episodes.length : 0;
+        logger.info(`POST /api/anime/download - ${animeTitle} (${episodeCount} episodes)`, { source });
 
         // Validate input
-        if (!animeTitle || !animeId || !episodes || episodes.length === 0) {
+        if (!animeTitle || !animeId || !Array.isArray(episodes) || episodes.length === 0) {
             return res.status(400).json({ 
                 success: false, 
                 error: 'Missing required fields: animeTitle, animeId, episodes' 
@@ -162,10 +168,10 @@ router.post('/download', async (req, res) => {
         
         for (const ep of episodes) {
             // Episode ID format: animeId?ep=dataId
-            const episodeId = `${animeId}?ep=${ep.dataId}`;
+            const episodeId = source === 'aniwatch' ? ep.dataId : `${animeId}?ep=${ep.dataId}`;
             
             logger.info(`Getting stream URL for episode ${ep.episodeNo}`);
-            const streamResult = await animeApi.getBestStreamUrl(episodeId);
+            const streamResult = await animeApi.getBestStreamUrl(episodeId, source);
             
             if (streamResult.success && streamResult.url) {
                 episodesWithUrls.push({

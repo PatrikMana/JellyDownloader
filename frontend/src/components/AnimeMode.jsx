@@ -2,8 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from '../context/ToastContext';
 import { useDownload } from '../context/DownloadContext';
 
+const ANIME_SOURCES = [
+    { id: 'hianime', label: 'HiAnime' },
+    { id: 'aniwatch', label: 'Aniwatch' }
+];
+
 const AnimeMode = ({ isActive }) => {
     const [searchQuery, setSearchQuery] = useState('');
+    const [selectedSources, setSelectedSources] = useState(['hianime', 'aniwatch']);
     const [searching, setSearching] = useState(false);
     const [animeResults, setAnimeResults] = useState([]);
     const [selectedAnime, setSelectedAnime] = useState(null);
@@ -30,17 +36,35 @@ const AnimeMode = ({ isActive }) => {
             const data = await response.json();
             setApiStatus(data);
             if (!data.success) {
-                showWarning('Anime scraper nedostupný', `Zkontroluj ANIME_BASE_URL v .env (aktuálně: ${data.baseUrl || 'výchozí'})`);
+                showWarning('Anime zdroje nedostupné', 'HiAnime ani Aniwatch momentálně neodpovídají.');
             }
         } catch (error) {
             setApiStatus({ success: false, message: 'Could not check API status' });
         }
     };
 
+    const toggleSource = (sourceId) => {
+        setSelectedSources(prev => {
+            if (prev.includes(sourceId)) {
+                return prev.filter(source => source !== sourceId);
+            }
+
+            return [...prev, sourceId];
+        });
+    };
+
+    const getSourceLabel = (sourceId) => {
+        return ANIME_SOURCES.find(source => source.id === sourceId)?.label || sourceId || 'Neznámý zdroj';
+    };
+
     // Krok 1: Vyhledání anime
     const handleSearch = async (e) => {
         e.preventDefault();
         if (!searchQuery.trim()) return;
+        if (selectedSources.length === 0) {
+            showWarning('Vyber zdroj', 'Zaškrtni alespoň HiAnime nebo Aniwatch');
+            return;
+        }
 
         setSearching(true);
         setAnimeResults([]);
@@ -49,9 +73,10 @@ const AnimeMode = ({ isActive }) => {
         setSelectedEpisodes([]);
 
         try {
-            showInfo('Vyhledávám', `Hledám anime "${searchQuery}"...`);
+            const sourceLabel = selectedSources.map(getSourceLabel).join(', ');
+            showInfo('Vyhledávám', `Hledám anime "${searchQuery}" na: ${sourceLabel}`);
 
-            const response = await fetch(`/api/anime/search/${encodeURIComponent(searchQuery)}`);
+            const response = await fetch(`/api/anime/search/${encodeURIComponent(searchQuery)}?sources=${encodeURIComponent(selectedSources.join(','))}`);
             const data = await response.json();
             
             if (data.success && data.results && data.results.length > 0) {
@@ -77,7 +102,7 @@ const AnimeMode = ({ isActive }) => {
             
             showInfo('Načítám', `Načítám epizody pro ${anime.title}...`);
 
-            const response = await fetch(`/api/anime/episodes/${encodeURIComponent(anime.id)}`);
+            const response = await fetch(`/api/anime/episodes/${encodeURIComponent(anime.id)}?source=${encodeURIComponent(anime.source || 'hianime')}`);
             const data = await response.json();
 
             if (!data.success) {
@@ -139,6 +164,7 @@ const AnimeMode = ({ isActive }) => {
             const downloadData = {
                 animeTitle: selectedAnime.title,
                 animeId: selectedAnime.id,
+                source: selectedAnime.source || 'hianime',
                 episodes: episodesToDownload.map(ep => ({
                     episodeNo: ep.episodeNo,
                     dataId: ep.dataId,
@@ -197,7 +223,7 @@ const AnimeMode = ({ isActive }) => {
                         <i className="fas fa-exclamation-triangle" style={{ color: '#ffc107', marginRight: '10px' }}></i>
                         <strong>Anime scraper není dostupný.</strong>
                         <p style={{ margin: '10px 0 0', fontSize: '14px' }}>
-                            Nastav <code>ANIME_BASE_URL</code> v souboru <code>.env</code> na funkční HiAnime-kompatibilní doménu.
+                            Zkontroluj <code>ANIME_BASE_URL</code> nebo <code>ANIWATCH_BASE_URL</code> v souboru <code>.env</code>.
                             <br />
                             <a href="https://github.com/poypoy252525/hianime" target="_blank" rel="noopener noreferrer">
                                 Použitý scraper pattern →
@@ -225,7 +251,7 @@ const AnimeMode = ({ isActive }) => {
                             <button 
                                 type="submit" 
                                 className="btn btn-primary search-btn" 
-                                disabled={searching || !searchQuery.trim()}
+                                disabled={searching || !searchQuery.trim() || selectedSources.length === 0}
                             >
                                 {searching ? (
                                     <><i className="fas fa-spinner fa-spin"></i> Hledám...</>
@@ -233,6 +259,22 @@ const AnimeMode = ({ isActive }) => {
                                     <><i className="fas fa-search"></i> Hledat</>
                                 )}
                             </button>
+                        </div>
+                        <div className="anime-source-options" aria-label="Anime zdroje">
+                            {ANIME_SOURCES.map(source => (
+                                <label key={source.id} className="anime-source-option">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedSources.includes(source.id)}
+                                        onChange={() => toggleSource(source.id)}
+                                        disabled={searching}
+                                    />
+                                    <span className="anime-source-check">
+                                        <i className="fas fa-check"></i>
+                                    </span>
+                                    <span>{source.label}</span>
+                                </label>
+                            ))}
                         </div>
                     </form>
                 </div>
@@ -244,7 +286,7 @@ const AnimeMode = ({ isActive }) => {
                         <div className="series-cards">
                             {animeResults.map((anime, index) => (
                                 <div 
-                                    key={anime.id || index} 
+                                    key={`${anime.source || 'hianime'}-${anime.id || index}`}
                                     className="series-card"
                                     onClick={() => selectAnime(anime)}
                                 >
@@ -272,6 +314,10 @@ const AnimeMode = ({ isActive }) => {
                                                 {anime.tvInfo.dub && <span> | DUB: {anime.tvInfo.dub}</span>}
                                             </p>
                                         )}
+                                        <div className={`anime-source-badge ${anime.source || 'hianime'}`}>
+                                            <i className="fas fa-globe"></i>
+                                            <span>{anime.sourceName || getSourceLabel(anime.source)}</span>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -300,6 +346,9 @@ const AnimeMode = ({ isActive }) => {
                                 {selectedAnime.tvInfo && (
                                     <p>
                                         <span className="badge">{selectedAnime.tvInfo.showType || 'TV'}</span>
+                                        <span className={`badge anime-source-badge-inline ${selectedAnime.source || 'hianime'}`}>
+                                            {selectedAnime.sourceName || getSourceLabel(selectedAnime.source)}
+                                        </span>
                                         {selectedAnime.tvInfo.dub && (
                                             <span className="badge badge-success" style={{ marginLeft: '5px' }}>
                                                 DUB dostupný

@@ -11,6 +11,12 @@ const { logger } = require('../utils');
 
 const DEFAULT_BASE_URL = process.env.ANIME_BASE_URL || process.env.HIANIME_BASE_URL || 'https://www.hianimes.to';
 const LEGACY_EMBED_URL = process.env.ANIME_LEGACY_EMBED_URL || 'https://megaplay.buzz';
+const ANIWATCH_BASE_URL = process.env.ANIWATCH_BASE_URL || 'https://aniwatch.co.at';
+
+const SOURCE_DEFINITIONS = {
+    hianime: { id: 'hianime', name: 'HiAnime' },
+    aniwatch: { id: 'aniwatch', name: 'Aniwatch' }
+};
 
 const DEFAULT_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -38,13 +44,60 @@ function buildUrl(pathname) {
     return `${getBaseUrl()}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
 }
 
+function getAniwatchBaseUrl() {
+    return normalizeBaseUrl(process.env.ANIWATCH_BASE_URL || ANIWATCH_BASE_URL);
+}
+
+function buildAniwatchUrl(pathname) {
+    return `${getAniwatchBaseUrl()}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+}
+
+function getAniwatchRestUrl(pathname) {
+    return buildAniwatchUrl(`/wp-json/hianime/v1/${String(pathname || '').replace(/^\/+/, '')}`);
+}
+
 function absoluteUrl(url, base = getBaseUrl()) {
     if (!url) return null;
     try {
-        return new URL(url, base).toString();
+        return new URL(String(url).replace(/&#038;/g, '&'), base).toString();
     } catch {
         return url;
     }
+}
+
+function decodeBase64(value) {
+    if (!value) return null;
+    try {
+        return Buffer.from(value, 'base64').toString('utf8');
+    } catch {
+        return null;
+    }
+}
+
+function normalizeSource(source) {
+    const normalized = String(source || 'hianime').trim().toLowerCase();
+    return SOURCE_DEFINITIONS[normalized] ? normalized : 'hianime';
+}
+
+function getSourceName(source) {
+    return SOURCE_DEFINITIONS[normalizeSource(source)].name;
+}
+
+function parseSourceList(sources) {
+    const rawSources = Array.isArray(sources)
+        ? sources
+        : String(sources || 'hianime').split(',');
+
+    const uniqueSources = [...new Set(rawSources.map(normalizeSource))];
+    return uniqueSources.length > 0 ? uniqueSources : ['hianime'];
+}
+
+function addSourceMetadata(item, source) {
+    return {
+        ...item,
+        source: normalizeSource(source),
+        sourceName: getSourceName(source)
+    };
 }
 
 function getOrigin(url) {
@@ -293,17 +346,22 @@ async function fetchEmbedLink(serverDataId, episodeId) {
 async function fetchLegacyStream(epId, serverName, type) {
     const legacyBase = normalizeBaseUrl(LEGACY_EMBED_URL);
     const streamUrl = `${legacyBase}/stream/s-2/${epId}/${type}`;
-    const streamResponse = await api.get(streamUrl, {
-        headers: {
-            ...DEFAULT_HEADERS,
-            'Referer': `${legacyBase}/`
-        }
-    });
+    let dataId = epId;
 
-    const html = String(streamResponse.data || '');
-    const dataId = extractEmbedDataId(html);
-    if (!dataId) {
-        throw new Error('Could not get data-id from legacy player');
+    try {
+        const streamResponse = await api.get(streamUrl, {
+            headers: {
+                ...DEFAULT_HEADERS,
+                'Referer': `${legacyBase}/`
+            }
+        });
+
+        dataId = extractEmbedDataId(String(streamResponse.data || '')) || epId;
+    } catch (error) {
+        logger.warn('Legacy player page failed, trying direct source lookup', {
+            epId,
+            error: error.message
+        });
     }
 
     const sourcesResponse = await api.get(`${legacyBase}/stream/getSources`, {
@@ -398,7 +456,7 @@ async function getServersFromWatchPage(episodeId) {
  * @param {string} keyword - Search query
  * @returns {Promise<Object>} Search results
  */
-async function searchAnime(keyword) {
+async function searchHiAnime(keyword) {
     try {
         logger.info(`Anime Scraper: Searching for "${keyword}"`);
 
@@ -438,20 +496,88 @@ async function searchAnime(keyword) {
             if (tickEps) tvInfo.eps = tickEps;
 
             if (id && title) {
-                results.push({
+                results.push(addSourceMetadata({
                     id,
                     dataId,
                     title,
                     japaneseTitle,
                     poster,
                     tvInfo
-                });
+                }, 'hianime'));
             }
         });
 
         return { success: true, results };
     } catch (error) {
         logger.error('Anime search failed', { error: error.message });
+        return { success: false, error: error.message, results: [] };
+    }
+}
+
+async function searchAniwatch(keyword) {
+    try {
+        logger.info(`Aniwatch Scraper: Searching for "${keyword}"`);
+
+        const response = await api.get(buildAniwatchUrl('/'), {
+            params: { s: keyword },
+            headers: {
+                ...DEFAULT_HEADERS,
+                'Referer': getAniwatchBaseUrl()
+            }
+        });
+
+        const $ = cheerio.load(response.data);
+        const results = [];
+
+        $('.film_list-wrap .flw-item').each((_, element) => {
+            const el = $(element);
+            const link = el.find('.film-poster .film-poster-ahref, a[data-id]').first();
+            const titleLink = el.find('.film-detail .film-name .dynamic-name, .film-detail .film-name a').first();
+
+            const animeId = link.attr('data-id');
+            const title = titleLink.text().trim() || titleLink.attr('title') || link.attr('title') || null;
+            const japaneseTitle = titleLink.attr('data-jname') || null;
+            const poster = absoluteUrl(
+                el.find('.film-poster img').attr('data-src') || el.find('.film-poster img').attr('src'),
+                getAniwatchBaseUrl()
+            );
+
+            const tvInfo = {};
+            el.find('.film-detail .fd-infor .fdi-item').each((_, item) => {
+                const text = $(item).text().trim();
+                const lower = text.toLowerCase();
+
+                if (['tv', 'ona', 'movie', 'ova', 'special', 'music'].some(showType => lower.includes(showType))) {
+                    tvInfo.showType = text;
+                } else if (lower.includes('min')) {
+                    tvInfo.duration = text;
+                }
+            });
+
+            const tickSub = el.find('.tick-sub').text().trim();
+            const tickDub = el.find('.tick-dub').text().trim();
+            const tickEps = el.find('.tick-eps').text().trim();
+
+            if (tickSub) tvInfo.sub = tickSub;
+            if (tickDub) tvInfo.dub = tickDub;
+            if (tickEps) tvInfo.eps = tickEps;
+
+            if (animeId && title) {
+                results.push(addSourceMetadata({
+                    id: String(animeId),
+                    dataId: String(animeId),
+                    title,
+                    japaneseTitle,
+                    poster,
+                    tvInfo,
+                    detailUrl: absoluteUrl(titleLink.attr('href') || link.attr('href'), getAniwatchBaseUrl())
+                }, 'aniwatch'));
+            }
+        });
+
+        return { success: true, results };
+    } catch (error) {
+        logger.error('Aniwatch search failed', { error: error.message });
         return { success: false, error: error.message, results: [] };
     }
 }
@@ -526,7 +652,7 @@ async function getAnimeInfo(animeId) {
  * @param {string} animeId - Anime ID
  * @returns {Promise<Object>} Episodes list
  */
-async function getEpisodes(animeId) {
+async function getHiAnimeEpisodes(animeId) {
     try {
         logger.info(`Anime Scraper: Getting episodes for "${animeId}"`);
 
@@ -584,12 +710,64 @@ async function getEpisodes(animeId) {
     }
 }
 
+async function getAniwatchEpisodes(animeId) {
+    try {
+        const normalizedId = String(animeId || '').replace(/^aniwatch:/i, '').trim();
+        logger.info(`Aniwatch Scraper: Getting episodes for "${normalizedId}"`);
+
+        const response = await api.get(getAniwatchRestUrl(`episode/list/${normalizedId}`), {
+            headers: {
+                ...DEFAULT_HEADERS,
+                'Accept': 'application/json',
+                'Referer': getAniwatchBaseUrl()
+            }
+        });
+
+        const $ = cheerio.load(response.data?.html || '');
+        const episodes = [];
+
+        $('.detail-infor-content .ss-list a, .ss-list a.ep-item').each((_, el) => {
+            const item = $(el);
+            const episodeNo = Number(item.attr('data-number'));
+            const dataId = item.attr('data-id');
+            const href = item.attr('href') || '';
+
+            if (!dataId || !episodeNo) return;
+
+            episodes.push(addSourceMetadata({
+                episodeNo,
+                id: String(dataId),
+                dataId: String(dataId),
+                title: item.attr('title')?.trim()
+                    || item.find('.ep-name').text().trim().replace(/\s+/g, ' ')
+                    || `Episode ${episodeNo}`,
+                japaneseTitle: item.attr('data-jname')?.trim() || null,
+                isFiller: item.hasClass('ssl-item-filler'),
+                url: absoluteUrl(href, getAniwatchBaseUrl())
+            }, 'aniwatch'));
+        });
+
+        if (episodes.length === 0) {
+            return { success: false, error: 'No episodes found', episodes: [] };
+        }
+
+        return {
+            success: true,
+            totalEpisodes: episodes.length,
+            episodes
+        };
+    } catch (error) {
+        logger.error('Aniwatch get episodes failed', { error: error.message });
+        return { success: false, error: error.message, episodes: [] };
+    }
+}
+
 /**
  * Get available servers for an episode
  * @param {string} episodeId - Episode ID (the number after ?ep=)
  * @returns {Promise<Object>} Available servers
  */
-async function getServers(episodeId) {
+async function getHiAnimeServers(episodeId) {
     try {
         const epId = extractEpisodeId(episodeId);
         logger.info(`Anime Scraper: Getting servers for episode "${epId}"`);
@@ -637,6 +815,47 @@ async function getServers(episodeId) {
     }
 }
 
+async function getAniwatchServers(episodeId) {
+    try {
+        const epId = extractEpisodeId(episodeId);
+        logger.info(`Aniwatch Scraper: Getting servers for episode "${epId}"`);
+
+        const response = await api.get(getAniwatchRestUrl(`episode/servers/${epId}`), {
+            headers: {
+                ...DEFAULT_HEADERS,
+                'Accept': 'application/json',
+                'Referer': getAniwatchBaseUrl()
+            }
+        });
+
+        const $ = cheerio.load(response.data?.html || '');
+        const servers = [];
+
+        $('.server-item').each((_, element) => {
+            const item = $(element);
+            const embedUrl = decodeBase64(item.attr('data-hash'));
+            const type = item.attr('data-type') || 'sub';
+            const serverName = item.attr('data-server-name') || item.find('a, button, .btn').text().trim() || 'HD-1';
+            const upstreamEpisodeId = extractUpstreamEpisodeId(embedUrl);
+
+            if (embedUrl && type) {
+                servers.push(addSourceMetadata({
+                    type,
+                    dataId: upstreamEpisodeId || epId,
+                    serverId: item.attr('data-server-id') || null,
+                    serverName,
+                    embedUrl
+                }, 'aniwatch'));
+            }
+        });
+
+        return { success: true, servers };
+    } catch (error) {
+        logger.error('Aniwatch get servers failed', { error: error.message });
+        return { success: false, error: error.message, servers: [] };
+    }
+}
+
 /**
  * Get streaming info for an episode
  * @param {string} episodeId - Episode ID with ep param
@@ -644,13 +863,13 @@ async function getServers(episodeId) {
  * @param {string} type - 'sub' or 'dub'
  * @returns {Promise<Object>} Streaming info with HLS URL
  */
-async function getStreamingInfo(episodeId, serverName = 'hd-1', type = 'dub') {
+async function getHiAnimeStreamingInfo(episodeId, serverName = 'hd-1', type = 'dub') {
     const epId = extractEpisodeId(episodeId);
 
     try {
         logger.info(`Anime Scraper: Getting stream for ep "${epId}" (server: ${serverName}, type: ${type})`);
 
-        const serversResult = await getServers(episodeId);
+        const serversResult = await getHiAnimeServers(episodeId);
         if (!serversResult.success || serversResult.servers.length === 0) {
             throw new Error(serversResult.error || 'No episode servers found');
         }
@@ -687,12 +906,52 @@ async function getStreamingInfo(episodeId, serverName = 'hd-1', type = 'dub') {
     }
 }
 
+async function getAniwatchStreamingInfo(episodeId, serverName = 'hd-1', type = 'dub') {
+    const epId = extractEpisodeId(episodeId);
+
+    try {
+        logger.info(`Aniwatch Scraper: Getting stream for ep "${epId}" (server: ${serverName}, type: ${type})`);
+
+        const serversResult = await getAniwatchServers(epId);
+        if (!serversResult.success || serversResult.servers.length === 0) {
+            throw new Error(serversResult.error || 'No episode servers found');
+        }
+
+        const server = pickServer(serversResult.servers, serverName, type);
+        if (!server) {
+            return { success: false, error: `No ${type} server found for episode ${epId}` };
+        }
+
+        try {
+            const upstreamEpisodeId = extractUpstreamEpisodeId(server.embedUrl);
+            const stream = upstreamEpisodeId
+                ? await fetchLegacyStream(upstreamEpisodeId, server.serverName || serverName, server.type || type)
+                : await fetchSourcesFromEmbed(server.embedUrl, server);
+
+            return { success: true, stream };
+        } catch (sourceError) {
+            logger.warn('Aniwatch direct source resolver failed, trying embed resolver', {
+                error: sourceError.message,
+                episodeId: epId,
+                server: server.serverName,
+                type
+            });
+
+            const stream = await fetchSourcesFromEmbed(server.embedUrl, server);
+            return { success: true, stream };
+        }
+    } catch (error) {
+        logger.error('Aniwatch get streaming info failed', { error: error.message });
+        return { success: false, error: error.message };
+    }
+}
+
 /**
  * Get best streaming URL for an episode (prefers dub, falls back to sub)
  * @param {string} episodeId - Episode ID with ep param
  * @returns {Promise<Object>} Best streaming URL
  */
-async function getBestStreamUrl(episodeId) {
+async function getHiAnimeBestStreamUrl(episodeId) {
     const attempts = [
         { server: 'hd-1', type: 'dub' },
         { server: 'hd-3', type: 'dub' },
@@ -703,7 +962,7 @@ async function getBestStreamUrl(episodeId) {
     ];
 
     for (const attempt of attempts) {
-        const result = await getStreamingInfo(episodeId, attempt.server, attempt.type);
+        const result = await getHiAnimeStreamingInfo(episodeId, attempt.server, attempt.type);
         if (result.success && result.stream?.url) {
             return {
                 success: true,
@@ -719,17 +978,144 @@ async function getBestStreamUrl(episodeId) {
     return { success: false, error: 'No stream available' };
 }
 
+async function getAniwatchBestStreamUrl(episodeId) {
+    const attempts = [
+        { server: 'hd-1', type: 'dub' },
+        { server: 'hd-3', type: 'dub' },
+        { server: 'hd-2', type: 'dub' },
+        { server: 'hd-1', type: 'sub' },
+        { server: 'hd-3', type: 'sub' },
+        { server: 'hd-2', type: 'sub' }
+    ];
+
+    for (const attempt of attempts) {
+        const result = await getAniwatchStreamingInfo(episodeId, attempt.server, attempt.type);
+        if (result.success && result.stream?.url) {
+            return {
+                success: true,
+                url: result.stream.url,
+                type: result.stream.type,
+                server: result.stream.server,
+                tracks: result.stream.tracks,
+                referer: result.stream.referer
+            };
+        }
+    }
+
+    return { success: false, error: 'No stream available' };
+}
+
+async function searchAnime(keyword, options = {}) {
+    const sources = parseSourceList(options.sources || options.source);
+    const sourceSearchers = {
+        hianime: searchHiAnime,
+        aniwatch: searchAniwatch
+    };
+
+    const settledResults = await Promise.all(sources.map(async source => {
+        const result = await sourceSearchers[source](keyword);
+        return { source, result };
+    }));
+
+    const results = [];
+    const sourceStatus = {};
+    const errors = [];
+
+    for (const { source, result } of settledResults) {
+        sourceStatus[source] = {
+            success: !!result.success,
+            count: result.results?.length || 0,
+            error: result.error || null
+        };
+
+        if (result.success && result.results?.length) {
+            results.push(...result.results);
+        } else if (result.error) {
+            errors.push(`${getSourceName(source)}: ${result.error}`);
+        }
+    }
+
+    return {
+        success: results.length > 0 || settledResults.some(item => item.result.success),
+        results,
+        sources: sourceStatus,
+        error: results.length > 0 ? null : errors.join('; ') || 'No anime found'
+    };
+}
+
+async function getEpisodes(animeId, source = 'hianime') {
+    return normalizeSource(source) === 'aniwatch'
+        ? getAniwatchEpisodes(animeId)
+        : getHiAnimeEpisodes(animeId);
+}
+
+async function getServers(episodeId, source = 'hianime') {
+    return normalizeSource(source) === 'aniwatch'
+        ? getAniwatchServers(episodeId)
+        : getHiAnimeServers(episodeId);
+}
+
+async function getStreamingInfo(episodeId, serverName = 'hd-1', type = 'dub', source = 'hianime') {
+    return normalizeSource(source) === 'aniwatch'
+        ? getAniwatchStreamingInfo(episodeId, serverName, type)
+        : getHiAnimeStreamingInfo(episodeId, serverName, type);
+}
+
+async function getBestStreamUrl(episodeId, source = 'hianime') {
+    return normalizeSource(source) === 'aniwatch'
+        ? getAniwatchBestStreamUrl(episodeId)
+        : getHiAnimeBestStreamUrl(episodeId);
+}
+
 /**
  * Check if anime scraper is working
  * @returns {Promise<boolean>}
  */
-async function checkHealth() {
+async function checkHiAnimeHealth() {
     try {
         const response = await api.get(buildUrl('/home'), { timeout: 5000 });
         return response.status === 200;
     } catch {
         return false;
     }
+}
+
+async function checkAniwatchHealth() {
+    try {
+        const response = await api.get(buildAniwatchUrl('/'), { timeout: 5000 });
+        return response.status === 200;
+    } catch {
+        return false;
+    }
+}
+
+async function checkHealth(source = 'hianime') {
+    return normalizeSource(source) === 'aniwatch'
+        ? checkAniwatchHealth()
+        : checkHiAnimeHealth();
+}
+
+async function checkSourcesHealth() {
+    const [hianime, aniwatch] = await Promise.all([
+        checkHiAnimeHealth(),
+        checkAniwatchHealth()
+    ]);
+
+    return {
+        success: hianime || aniwatch,
+        sources: {
+            hianime: {
+                success: hianime,
+                name: SOURCE_DEFINITIONS.hianime.name,
+                baseUrl: getBaseUrl()
+            },
+            aniwatch: {
+                success: aniwatch,
+                name: SOURCE_DEFINITIONS.aniwatch.name,
+                baseUrl: getAniwatchBaseUrl()
+            }
+        }
+    };
 }
 
 module.exports = {
@@ -740,5 +1126,8 @@ module.exports = {
     getStreamingInfo,
     getBestStreamUrl,
     checkHealth,
-    getBaseUrl
+    checkSourcesHealth,
+    getBaseUrl,
+    getAniwatchBaseUrl,
+    getSourceName
 };

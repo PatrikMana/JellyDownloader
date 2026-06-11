@@ -406,6 +406,9 @@
 
 .series-card .series-info {
     padding: var(--spacing-sm);
+    display: flex;
+    flex-direction: column;
+    min-height: 130px;
 }
 
 .series-card .series-info h4 {
@@ -417,6 +420,113 @@
     font-size: 0.8rem;
     color: var(--color-text-muted);
     margin-bottom: var(--spacing-sm);
+}
+
+.anime-source-options {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+    margin-top: var(--spacing-sm);
+}
+
+#anime-section .search-form {
+    flex-direction: column;
+}
+
+#anime-section .search-input-wrapper {
+    width: 100%;
+}
+
+.anime-source-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 36px;
+    padding: 0.45rem 0.75rem;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: 0.78rem;
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    border-radius: var(--border-radius);
+}
+
+.anime-source-option:hover {
+    border-color: var(--color-border-light);
+    color: var(--color-text-primary);
+}
+
+.anime-source-option input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.anime-source-check {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-border);
+    color: transparent;
+    background: var(--color-bg-secondary);
+    flex-shrink: 0;
+    border-radius: var(--border-radius);
+}
+
+.anime-source-check i {
+    font-size: 0.65rem;
+}
+
+.anime-source-option input:checked + .anime-source-check {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: var(--color-bg);
+}
+
+.anime-source-badge,
+.anime-source-badge-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.28rem 0.55rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg);
+    color: var(--color-text-secondary);
+    font-size: 0.68rem;
+    font-weight: var(--font-weight-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+    border-radius: var(--border-radius);
+}
+
+.anime-source-badge {
+    margin-top: auto;
+}
+
+.anime-source-badge.hianime,
+.anime-source-badge-inline.hianime {
+    border-color: rgba(255, 221, 149, 0.45);
+    color: #ffdd95;
+}
+
+.anime-source-badge.aniwatch,
+.anime-source-badge-inline.aniwatch {
+    border-color: rgba(0, 255, 255, 0.35);
+    color: var(--color-glitch-cyan);
+}
+
+.anime-source-badge-inline {
+    margin-left: 5px;
 }
 
 /* Series Detail */
